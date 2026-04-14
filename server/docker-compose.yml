@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  tistory-poster:
+    build: .
+    container_name: tistory-poster
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - KAKAO_EMAIL=${KAKAO_EMAIL}
+      - KAKAO_PASSWORD=${KAKAO_PASSWORD}
+      - TISTORY_BLOG=${TISTORY_BLOG}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - DISCORD_WEBHOOK=${DISCORD_WEBHOOK}
+    volumes:
+      - ./logs:/app/logs

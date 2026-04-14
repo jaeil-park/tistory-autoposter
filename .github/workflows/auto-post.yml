@@ -7,23 +7,18 @@ on:
         description: "포스팅 주제"
         required: true
         type: string
-      category_id:
-        description: "카테고리 ID (기본: 0)"
-        required: false
-        default: "0"
-        type: string
   schedule:
     - cron: "0 0 * * 1,3,5"
 
 env:
-  ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
-  TISTORY_BLOG:        ${{ secrets.TISTORY_BLOG }}
-  NOTION_TOKEN:        ${{ secrets.NOTION_TOKEN }}
-  NOTION_PAGE_ID:      ${{ secrets.NOTION_PAGE_ID }}
-  DISCORD_WEBHOOK:     ${{ secrets.DISCORD_WEBHOOK }}
-  MAKE_WEBHOOK:        ${{ secrets.MAKE_WEBHOOK }}
-  POST_TOPIC:          ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
-  TISTORY_CATEGORY_ID: ${{ github.event.inputs.category_id || '0' }}
+  ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+  TISTORY_BLOG:       ${{ secrets.TISTORY_BLOG }}
+  NOTION_TOKEN:       ${{ secrets.NOTION_TOKEN }}
+  NOTION_PAGE_ID:     ${{ secrets.NOTION_PAGE_ID }}
+  DISCORD_WEBHOOK:    ${{ secrets.DISCORD_WEBHOOK }}
+  HOME_SERVER_URL:    ${{ secrets.HOME_SERVER_URL }}
+  WEBHOOK_SECRET:     ${{ secrets.WEBHOOK_SECRET }}
+  POST_TOPIC:         ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
 
 jobs:
   auto-post:
@@ -43,8 +38,3 @@ jobs:
           name: post-${{ github.run_number }}
           path: post_output.json
           retention-days: 7
-      - if: failure()
-        run: |
-          curl -s -X POST "$DISCORD_WEBHOOK" \
-            -H "Content-Type: application/json" \
-            -d "{\"content\": \"❌ **포스팅 실패** (Run #${{ github.run_number }})\n주제: $POST_TOPIC\"}" || true
