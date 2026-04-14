@@ -12,7 +12,7 @@ from datetime import datetime
 
 # ── 환경변수 ──────────────────────────────────────────
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-TOPIC             = os.getenv("POST_TOPIC", "")       # GitHub Actions input으로 받음
+TOPIC             = os.getenv("POST_TOPIC", "")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -37,50 +37,69 @@ SYSTEM_PROMPT = """
 - 마크다운 형식 (티스토리 HTML 모드용)
 - 코드블록: ```언어명 + 상세 주석 포함
 - 썸네일 제목: 30~45자, SEO 최적화
-- SEO 태그: 10~15개 #해시태그
+- SEO 태그: 10~15개 해시태그 (# 없이 문자열만)
 - 마무리 요약: 3줄 이내
 - 참고 링크 섹션 포함
 - 어투: 전문적이고 실무적, 군더더기 없음
 
-## JSON 출력 형식 (반드시 이 형식만 출력, 마크다운 코드블록 없이)
+## JSON 출력 형식 (이 형식만, 마크다운 코드블록 없이 순수 JSON)
 {
   "thumbnail_title": "썸네일 제목 (35자 내외)",
   "title": "포스트 전체 제목 (SEO 최적화)",
-  "content_md": "마크다운 본문 전체",
-  "content_html": "<p>HTML 변환된 본문</p>",
-  "tags": ["태그1", "태그2", ...],
+  "content_md": "마크다운 본문 전체 (코드블록 포함)",
+  "tags": ["태그1", "태그2"],
   "post_type": "tutorial|troubleshooting|devlog|concept|snippet",
   "meta_description": "검색 노출용 메타 설명 (80자 내외)"
 }
+
+content_html은 포함하지 마세요. JSON 외 텍스트도 절대 포함하지 마세요.
 """
 
 
 def markdown_to_html(md: str) -> str:
-    """마크다운을 HTML로 변환 (markdown 라이브러리 사용)"""
+    """마크다운을 HTML로 변환"""
     try:
-        import markdown
-        return markdown.markdown(
+        import markdown as md_lib
+        return md_lib.markdown(
             md,
-            extensions=["fenced_code", "tables", "codehilite", "toc"]
+            extensions=["fenced_code", "tables", "toc"]
         )
     except ImportError:
-        # fallback: 기본 변환
-        html = md
-        # 코드블록
         import re
+        html = md
         html = re.sub(r"```(\w+)\n(.*?)```", r"<pre><code class='language-\1'>\2</code></pre>", html, flags=re.DOTALL)
-        # 헤딩
         for i in range(6, 0, -1):
             html = re.sub(rf"^{'#'*i} (.+)$", rf"<h{i}>\1</h{i}>", html, flags=re.MULTILINE)
-        # 굵게
         html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
-        # 줄바꿈
         html = html.replace("\n\n", "</p><p>")
         return f"<p>{html}</p>"
 
 
+def _call_api(user_message: str, max_tokens: int) -> str:
+    """Claude API 호출 + 잘림 감지"""
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_message}]
+    )
+
+    if response.stop_reason == "max_tokens":
+        raise ValueError(f"응답이 max_tokens({max_tokens})에서 잘림")
+
+    raw = response.content[0].text.strip()
+
+    # 코드블록 래핑 제거
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return raw.strip()
+
+
 def generate_post(topic: str) -> dict:
-    """Claude API로 블로그 포스트 생성"""
+    """Claude API로 블로그 포스트 생성 (content_html은 로컬 변환으로 토큰 절약)"""
     print(f"🤖 Claude API로 포스트 생성 중: '{topic}'")
 
     user_message = f"""
@@ -88,33 +107,37 @@ def generate_post(topic: str) -> dict:
 
 **주제**: {topic}
 
-위 주제를 분석하여 적절한 포스트 타입을 선택하고, 
+위 주제를 분석하여 적절한 포스트 타입을 선택하고,
 실무에 바로 적용 가능한 포스트를 JSON 형식으로 출력해주세요.
-JSON만 출력하고, 다른 텍스트는 절대 포함하지 마세요.
-content_html은 content_md를 HTML로 변환한 결과입니다.
+
+규칙:
+- 순수 JSON만 출력 (마크다운 코드블록 래핑 금지)
+- content_html 필드 제외 (로컬 변환 처리)
+- content_md는 마크다운 전체 본문 (코드블록, 헤딩 포함)
 """
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4000,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}]
-    )
+    last_error = None
+    for max_tokens in [8000, 6000, 4000]:
+        try:
+            raw = _call_api(user_message, max_tokens)
+            post_data = json.loads(raw)
+            break
+        except ValueError as e:
+            print(f"⚠️ {e} → 재시도...")
+            last_error = e
+            continue
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 파싱 실패 (max_tokens={max_tokens}): {e}")
+            print(f"   응답 앞부분: {raw[:200]}")
+            last_error = e
+            if max_tokens == 4000:
+                raise
+            continue
+    else:
+        raise RuntimeError(f"❌ 모든 재시도 실패: {last_error}")
 
-    raw = response.content[0].text.strip()
-
-    # JSON 파싱 (혹시 코드블록으로 감싸진 경우 제거)
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
-
-    post_data = json.loads(raw)
-
-    # content_html이 없거나 빈 경우 content_md에서 변환
-    if not post_data.get("content_html"):
-        post_data["content_html"] = markdown_to_html(post_data.get("content_md", ""))
+    # content_html 로컬 변환
+    post_data["content_html"] = markdown_to_html(post_data.get("content_md", ""))
 
     print(f"✅ 포스트 생성 완료: {post_data['title']}")
     return post_data
@@ -133,13 +156,11 @@ if __name__ == "__main__":
 
     if not topic:
         print("❌ 주제를 입력해주세요.")
-        print("사용법: python generate_post.py '주제' 또는 POST_TOPIC 환경변수 설정")
         sys.exit(1)
 
     post_data = generate_post(topic)
     save_output(post_data)
 
-    # 요약 출력 (GitHub Actions 로그용)
     print("\n" + "="*50)
     print(f"📌 제목: {post_data['title']}")
     print(f"🖼️  썸네일: {post_data['thumbnail_title']}")
