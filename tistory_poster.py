@@ -1,8 +1,10 @@
 """
-tistory_poster.py - v5
+tistory_poster.py - v6
 핵심 수정:
-- 카카오 간편로그인 계정 선택 화면 → 첫 번째 계정 무조건 클릭
-- 매 단계 URL 출력으로 흐름 추적
+- URL 패턴 기반 화면 정확히 판별
+- 일반 로그인: 이메일 + 비밀번호 순서대로 입력
+- 간편로그인: 계정 선택 후 비밀번호
+- 매 단계 스크린샷 저장으로 정확한 디버깅
 """
 
 import asyncio
@@ -24,117 +26,187 @@ async def notify_discord(message: str):
         await session.post(DISCORD_WEBHOOK, json={"content": message})
 
 
-async def kakao_login(page):
-    """카카오 간편로그인 전체 플로우"""
+async def save_debug(page, name: str):
+    """디버깅용 스크린샷 + HTML 저장"""
+    await page.screenshot(path=f"{name}.png")
+    with open(f"{name}.html", "w", encoding="utf-8") as f:
+        f.write(await page.content())
+    print(f"  📸 저장: {name}.png / {name}.html")
 
-    # Step 1: 티스토리 로그인 페이지
+
+async def fill_input(page, selectors: list, value: str, label: str) -> bool:
+    for sel in selectors:
+        try:
+            el = page.locator(sel).first
+            await el.wait_for(state="visible", timeout=3000)
+            await el.clear()
+            await el.fill(value)
+            print(f"  ✅ {label}: {sel}")
+            return True
+        except Exception:
+            continue
+    print(f"  ⚠️ {label} 입력 실패")
+    return False
+
+
+async def click_button(page, selectors: list, label: str) -> bool:
+    for sel in selectors:
+        try:
+            el = page.locator(sel).first
+            await el.wait_for(state="visible", timeout=3000)
+            await el.click()
+            print(f"  ✅ {label}: {sel}")
+            return True
+        except Exception:
+            continue
+    print(f"  ⚠️ {label} 클릭 실패")
+    return False
+
+
+async def kakao_login(page):
+    """카카오 로그인 — 일반/간편 로그인 모두 대응"""
+
+    # Step 1: 티스토리 로그인
     print("🔑 티스토리 로그인 페이지...")
     await page.goto("https://www.tistory.com/auth/login",
                     wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(2000)
+    await save_debug(page, "step1_tistory_login")
 
     # Step 2: 카카오 버튼 클릭
     print("🟡 카카오 버튼 클릭...")
-    await page.locator(".btn_login.link_kakao_id").click()
+    await click_button(page, [
+        ".btn_login.link_kakao_id",
+        "a[href*='kakao']",
+        "button:has-text('카카오')",
+    ], "카카오 버튼")
+
     await page.wait_for_load_state("domcontentloaded", timeout=15000)
     await page.wait_for_timeout(2000)
-    print(f"  📍 URL: {page.url[:80]}")
-
-    # Step 3: 페이지 스냅샷 저장 (로그인 화면 구조 파악)
-    with open("kakao_login_page.html", "w", encoding="utf-8") as f:
-        f.write(await page.content())
-    print("  📄 kakao_login_page.html 저장")
-
-    # Step 4: 화면 유형 판별 후 처리
     url = page.url
+    print(f"  📍 URL: {url[:90]}")
+    await save_debug(page, "step2_after_kakao_btn")
 
-    if "login/simple" in url or "select_account" in url:
-        # ── 간편로그인 계정 선택 화면 ──────────────────────────
-        print("  👤 간편로그인 계정 선택 화면 → 첫 번째 계정 클릭...")
-        await page.screenshot(path="kakao_select.png")
+    # Step 3: 화면 유형 판별
+    if "login/simple" in url or "prompt=select_account" in url:
+        # ── 간편로그인 계정 선택 화면 ──────────────────
+        print("  👤 간편로그인 계정 선택 화면")
+        await save_debug(page, "step3_simple_login")
 
-        # 계정 선택 버튼들 (다양한 셀렉터 시도)
+        # 페이지 내 모든 a/button 텍스트 로그
+        elements_info = await page.evaluate("""
+            () => {
+                const els = [...document.querySelectorAll('a, button')];
+                return els
+                    .filter(e => e.offsetParent)
+                    .map(e => ({
+                        tag: e.tagName,
+                        class: e.className,
+                        text: e.innerText.trim().substring(0, 50),
+                        href: e.href || ''
+                    }))
+                    .filter(e => e.text.length > 0)
+                    .slice(0, 20);
+            }
+        """)
+        print("  📋 페이지 내 클릭 요소:")
+        for el in elements_info:
+            print(f"     [{el['tag']}] class={el['class'][:30]} text={el['text']}")
+
+        # 이메일 포함된 요소 클릭 시도
         clicked = False
-        selectors = [
-            # 계정 목록 아이템
-            ".list_account > li:first-child a",
-            ".item_account:first-child",
-            "ul.list_account li:first-child",
-            # 로그인 버튼 형태
-            ".btn_account",
-            "[class*='account']:first-child",
-            # 일반 링크/버튼
-            "a.link_account",
-            "button.btn_account",
-        ]
-        for sel in selectors:
-            try:
-                el = page.locator(sel).first
-                await el.wait_for(state="visible", timeout=3000)
-                await el.click()
-                print(f"  ✅ 계정 클릭: {sel}")
-                clicked = True
-                break
-            except Exception:
-                continue
+        email_local = KAKAO_EMAIL.split('@')[0]  # @ 앞부분
+
+        for el in elements_info:
+            if KAKAO_EMAIL in el['text'] or email_local in el['text']:
+                # 해당 텍스트 가진 요소 클릭
+                try:
+                    await page.get_by_text(el['text']).first.click()
+                    print(f"  ✅ 이메일 매칭 클릭: {el['text'][:40]}")
+                    clicked = True
+                    break
+                except Exception:
+                    continue
 
         if not clicked:
-            # 마지막 수단: 페이지에서 클릭 가능한 첫 번째 요소
-            print("  ⚠️ 셀렉터 전부 실패 → JS로 첫 계정 클릭 시도...")
-            await page.evaluate("""
-                const links = document.querySelectorAll('a, button');
-                for (const el of links) {
-                    if (el.offsetParent && el.innerText.trim().length > 0) {
-                        el.click();
-                        break;
-                    }
-                }
-            """)
+            # 첫 번째 계정 클릭 (다양한 셀렉터)
+            for sel in [
+                "li:first-child a", "li:first-child button",
+                ".list_account li:first-child a",
+                ".account_list li:first-child",
+                "[class*='item']:first-child",
+                "[class*='account']:first-child",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    await el.wait_for(state="visible", timeout=2000)
+                    await el.click()
+                    print(f"  ✅ 첫 계정 클릭: {sel}")
+                    clicked = True
+                    break
+                except Exception:
+                    continue
 
-        await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        if not clicked:
+            print("  ⚠️ 계정 선택 실패 → 새 계정으로 로그인 클릭 시도")
+            for sel in ["a:has-text('새로운 계정')", "button:has-text('새로운 계정')", "a:has-text('다른 계정')"]:
+                try:
+                    await page.locator(sel).first.click()
+                    print(f"  ✅ 새 계정 로그인: {sel}")
+                    break
+                except Exception:
+                    continue
+
+        await page.wait_for_load_state("domcontentloaded", timeout=10000)
         await page.wait_for_timeout(2000)
-        print(f"  📍 계정 선택 후 URL: {page.url[:80]}")
+        url = page.url
+        print(f"  📍 계정 선택 후: {url[:90]}")
+        await save_debug(page, "step3b_after_account_select")
 
-    # Step 5: 비밀번호 입력 화면 처리
-    url = page.url
-    print(f"  🔐 비밀번호 화면 확인... URL: {url[:80]}")
+    # Step 4: 로그인 폼 처리 (이메일 + 비밀번호)
+    print("  📝 로그인 폼 입력...")
+    await save_debug(page, "step4_login_form")
 
-    # 비밀번호 필드 대기
-    pw_input = None
-    for sel in ["#password--2", "input[name='password']", "input[type='password']"]:
+    # 이메일 필드 (비어있으면 입력)
+    email_selectors = ["#loginId--1", "input[name='loginId']", "input[type='email']", "input[name='email']"]
+    for sel in email_selectors:
         try:
             el = page.locator(sel).first
-            await el.wait_for(state="visible", timeout=5000)
-            pw_input = el
-            print(f"  ✅ 비밀번호 필드: {sel}")
+            await el.wait_for(state="visible", timeout=3000)
+            val = await el.input_value()
+            if not val:
+                await el.fill(KAKAO_EMAIL)
+                print(f"  ✅ 이메일 입력: {sel}")
+            else:
+                print(f"  ℹ️ 이메일 이미 입력됨: {val[:20]}")
             break
         except Exception:
             continue
 
-    if pw_input is None:
-        # 비밀번호 없이 바로 tistory로 넘어간 경우 (자동 로그인)
-        print("  ℹ️ 비밀번호 필드 없음 → 자동 로그인 시도 중...")
-        await page.wait_for_timeout(3000)
-    else:
-        await pw_input.fill(KAKAO_PASSWORD)
-        print("  ✅ 비밀번호 입력 완료")
+    # 비밀번호 입력
+    pw_selectors = ["#password--2", "input[name='password']", "input[type='password']"]
+    pw_ok = await fill_input(page, pw_selectors, KAKAO_PASSWORD, "비밀번호")
 
-        # 로그인 버튼 클릭
-        for sel in [".btn_g.highlight.submit", "button[type='submit']", "button.submit", ".submit"]:
-            try:
-                btn = page.locator(sel).first
-                await btn.wait_for(state="visible", timeout=3000)
-                await btn.click()
-                print(f"  ✅ 로그인 버튼: {sel}")
-                break
-            except Exception:
-                continue
+    if not pw_ok:
+        print("  ⚠️ 비밀번호 필드 없음 → 자동 로그인 가능성")
 
-    # Step 6: tistory.com 리다이렉트 대기
+    # 로그인 버튼
+    await click_button(page, [
+        ".btn_g.highlight.submit",
+        "button[type='submit']",
+        "button.submit",
+        ".submit",
+        "input[type='submit']",
+    ], "로그인 버튼")
+
+    await page.wait_for_timeout(2000)
+    await save_debug(page, "step5_after_login_submit")
+    print(f"  📍 로그인 제출 후: {page.url[:90]}")
+
+    # Step 5: tistory.com 리다이렉트 대기
     print("  ⏳ 티스토리 리다이렉트 대기...")
     await page.wait_for_url("**/tistory.com/**", timeout=30000)
     await page.wait_for_load_state("domcontentloaded")
-    await page.wait_for_timeout(1000)
     print(f"✅ 로그인 완료! URL: {page.url[:60]}")
 
 
@@ -162,17 +234,14 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
         try:
             await kakao_login(page)
 
-            # ── 글쓰기 ──────────────────────────────────────────
+            # 글쓰기
             write_url = f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/"
-            print(f"\n📝 글쓰기 이동: {write_url}")
+            print(f"\n📝 글쓰기: {write_url}")
             await page.goto(write_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)
+            await save_debug(page, "step6_editor")
 
-            with open("editor_snapshot.html", "w", encoding="utf-8") as f:
-                f.write(await page.content())
-            print("  📄 editor_snapshot.html 저장")
-
-            # ── 제목 ──────────────────────────────────────────
+            # 제목
             print(f"📌 제목: {title}")
             for sel in ["#post-title-inp", "input.tf_subject", "input[placeholder*='제목']"]:
                 try:
@@ -184,7 +253,7 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
                 except Exception:
                     continue
 
-            # ── HTML 모드 ──────────────────────────────────────
+            # HTML 모드
             print("🔄 HTML 모드...")
             for sel in ["button:has-text('HTML')", ".btn_html", "[data-mode='html']"]:
                 try:
@@ -197,10 +266,9 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
                 except Exception:
                     continue
 
-            # ── 본문 입력 ──────────────────────────────────────
+            # 본문 입력
             print("📄 본문 입력...")
             content_injected = False
-
             for frame in page.frames:
                 try:
                     result = await frame.evaluate(f"""
@@ -214,7 +282,7 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
                         }})();
                     """)
                     if result:
-                        print(f"  ✅ CodeMirror (iframe): {frame.url[:50]}")
+                        print(f"  ✅ CodeMirror (iframe)")
                         content_injected = True
                         break
                 except Exception:
@@ -250,10 +318,10 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
                     except Exception:
                         continue
 
-            print(f"  {'✅' if content_injected else '⚠️'} 본문 입력 {'완료' if content_injected else '실패'}")
+            print(f"  {'✅' if content_injected else '⚠️'} 본문 {'완료' if content_injected else '실패'}")
             await page.wait_for_timeout(1000)
 
-            # ── 태그 ──────────────────────────────────────────
+            # 태그
             if tags:
                 for sel in ["#tag-label", "input.tf_tag", "input[placeholder*='태그']"]:
                     try:
@@ -263,12 +331,12 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
                             await tag_inp.fill(tag)
                             await tag_inp.press("Enter")
                             await page.wait_for_timeout(300)
-                        print(f"  ✅ 태그 완료")
+                        print("  ✅ 태그 완료")
                         break
                     except Exception:
                         continue
 
-            # ── 발행 ──────────────────────────────────────────
+            # 발행
             print("🚀 발행...")
             for sel in ["#publish-layer-btn", "button.btn_publish", "button:has-text('발행')"]:
                 try:
@@ -314,9 +382,7 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
 
         except Exception as e:
             print(f"\n❌ 실패: {e}")
-            await page.screenshot(path="error_screenshot.png")
-            with open("error_page.html", "w", encoding="utf-8") as f:
-                f.write(await page.content())
+            await save_debug(page, "error_final")
             await notify_discord(f"❌ **티스토리 포스팅 실패**\n오류: {str(e)}")
             raise
         finally:
