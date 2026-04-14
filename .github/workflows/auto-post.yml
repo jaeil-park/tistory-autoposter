@@ -17,18 +17,16 @@ on:
 
 env:
   ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
-  KAKAO_EMAIL:         ${{ secrets.KAKAO_EMAIL }}
-  KAKAO_PASSWORD:      ${{ secrets.KAKAO_PASSWORD }}
   TISTORY_BLOG:        ${{ secrets.TISTORY_BLOG }}
+  TISTORY_SESSION_ID:  ${{ secrets.TISTORY_SESSION_ID }}
   DISCORD_WEBHOOK:     ${{ secrets.DISCORD_WEBHOOK }}
-  TISTORY_COOKIES:     ${{ secrets.TISTORY_COOKIES }}
   POST_TOPIC:          ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
   TISTORY_CATEGORY_ID: ${{ github.event.inputs.category_id || '0' }}
 
 jobs:
   auto-post:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - name: 📥 Checkout
@@ -41,10 +39,7 @@ jobs:
           cache: "pip"
 
       - name: 📦 Install dependencies
-        run: |
-          pip install -r requirements.txt
-          playwright install chromium
-          playwright install-deps chromium
+        run: pip install -r requirements.txt
 
       - name: 🚀 Generate & Publish Post
         run: python run.py
@@ -53,11 +48,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-${{ github.run_number }}
-          path: |
-            post_output.json
-            *.png
-            *.html
+          name: post-${{ github.run_number }}
+          path: post_output.json
           retention-days: 7
 
       - name: ❌ Notify failure

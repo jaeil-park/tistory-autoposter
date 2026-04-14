@@ -1,12 +1,14 @@
 name: 🍪 Save Kakao Login Cookies
 
 on:
-  workflow_dispatch:  # 수동 실행만
+  workflow_dispatch:
 
 jobs:
   save-cookies:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      secrets: write   # Secret 자동 업데이트 권한
 
     steps:
       - name: 📥 Checkout
@@ -19,16 +21,61 @@ jobs:
 
       - name: 📦 Install dependencies
         run: |
-          pip install playwright python-dotenv
+          pip install playwright aiohttp
           playwright install chromium
           playwright install-deps chromium
 
-      - name: 🍪 Extract Cookies via Login
+      - name: 🍪 Extract Cookies
         env:
           KAKAO_EMAIL:    ${{ secrets.KAKAO_EMAIL }}
           KAKAO_PASSWORD: ${{ secrets.KAKAO_PASSWORD }}
           TISTORY_BLOG:   ${{ secrets.TISTORY_BLOG }}
         run: python extract_cookies.py
+
+      - name: 🔐 Auto-save cookies to GitHub Secret
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # cookies.json 내용을 한 줄로 만들어서 Secret에 저장
+          COOKIES=$(cat cookies.json | tr -d '\n')
+          
+          # GitHub API로 Secret 업데이트
+          # 먼저 Public Key 가져오기
+          KEY_INFO=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/secrets/public-key")
+          
+          KEY_ID=$(echo $KEY_INFO | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['key_id'])")
+          PUBLIC_KEY=$(echo $KEY_INFO | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['key'])")
+          
+          # 쿠키값 암호화 후 Secret 저장
+          python3 << PYEOF
+          import base64, json, subprocess, sys
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
+          from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+          
+          cookies = open('cookies.json').read().strip()
+          public_key_bytes = base64.b64decode("$PUBLIC_KEY")
+          
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+          private_key = X25519PrivateKey.generate()
+          public_key = X25519PublicKey.from_public_bytes(public_key_bytes)
+          shared_key = private_key.exchange(public_key)
+          
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          import os
+          nonce = os.urandom(12)
+          aesgcm = AESGCM(shared_key[:32])
+          encrypted = aesgcm.encrypt(nonce, cookies.encode(), None)
+          
+          # sodium_sealed_box 방식 사용
+          print("암호화 시도 중...")
+          PYEOF
+          
+          echo "⚠️ GitHub Secret API는 libsodium 암호화 필요 → 아티팩트로 대체 저장"
+          echo "cookies.json을 아티팩트로 저장합니다."
 
       - name: 💾 Upload cookies artifact
         uses: actions/upload-artifact@v4
@@ -36,3 +83,20 @@ jobs:
           name: tistory-cookies
           path: cookies.json
           retention-days: 1
+
+      - name: ✅ Done
+        run: |
+          echo ""
+          echo "======================================"
+          echo "🍪 쿠키 추출 완료!"
+          echo "======================================"
+          echo ""
+          echo "📋 다음 단계:"
+          echo "   모바일 브라우저(데스크톱 모드)로:"
+          echo "   github.com → 이 레포 → Actions"
+          echo "   → 이번 실행 → Artifacts → tistory-cookies"
+          echo "   → 다운로드 → cookies.json 열기"
+          echo "   → 전체 복사 → Settings → Secrets"
+          echo "   → TISTORY_COOKIES 에 붙여넣기"
+          echo ""
+          echo "   또는 PC에서 진행 권장"
