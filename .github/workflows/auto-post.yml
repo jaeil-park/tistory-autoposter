@@ -21,6 +21,7 @@ env:
   NOTION_TOKEN:        ${{ secrets.NOTION_TOKEN }}
   NOTION_PAGE_ID:      ${{ secrets.NOTION_PAGE_ID }}
   DISCORD_WEBHOOK:     ${{ secrets.DISCORD_WEBHOOK }}
+  MAKE_WEBHOOK:        ${{ secrets.MAKE_WEBHOOK }}
   POST_TOPIC:          ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
   TISTORY_CATEGORY_ID: ${{ github.event.inputs.category_id || '0' }}
 
@@ -28,33 +29,21 @@ jobs:
   auto-post:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: 🐍 Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-
-      - name: 📦 Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: 🚀 Generate & Save to Notion
-        run: python run.py
-
-      - name: 💾 Upload artifact
-        if: always()
+      - run: pip install -r requirements.txt
+      - run: python run.py
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: post-${{ github.run_number }}
           path: post_output.json
           retention-days: 7
-
-      - name: ❌ Notify failure
-        if: failure()
+      - if: failure()
         run: |
           curl -s -X POST "$DISCORD_WEBHOOK" \
             -H "Content-Type: application/json" \
