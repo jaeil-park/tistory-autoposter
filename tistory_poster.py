@@ -1,14 +1,16 @@
 """
-tistory_poster.py - v12
-Notion 저장 + 카테고리 자동 분류
+tistory_poster.py - v13
+Notion 저장 + HTML 코드블록 토글 포함
+티스토리 HTML 모드에 바로 복붙 가능
 """
 
 import os
+import re
 import json
 import requests
 
-NOTION_TOKEN   = os.environ["NOTION_TOKEN"]
-NOTION_PAGE_ID = os.environ["NOTION_PAGE_ID"]
+NOTION_TOKEN    = os.environ["NOTION_TOKEN"]
+NOTION_PAGE_ID  = os.environ["NOTION_PAGE_ID"]
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 
 
@@ -22,7 +24,6 @@ def notify_discord(message: str):
 
 
 def post_to_tistory(title: str, content_html: str, tags: list, category_id: str = "0") -> str:
-    # post_output.json에서 전체 데이터 읽기
     post_data = {}
     try:
         with open("post_output.json", "r", encoding="utf-8") as f:
@@ -30,28 +31,22 @@ def post_to_tistory(title: str, content_html: str, tags: list, category_id: str 
     except Exception:
         pass
 
-    content_md      = post_data.get("content_md", content_html)
-    thumbnail_title = post_data.get("thumbnail_title", "")
-    notion_tag      = post_data.get("notion_tag", "📝 일반")
-    category_key    = post_data.get("category_key", "general")
-    meta_desc       = post_data.get("meta_description", "")
-    post_type       = post_data.get("post_type", "")
-
     return post_to_notion(
-        title=title,
-        content_md=content_md,
-        tags=tags,
-        thumbnail_title=thumbnail_title,
-        notion_tag=notion_tag,
-        category_key=category_key,
-        meta_desc=meta_desc,
-        post_type=post_type,
+        title           = title,
+        content_md      = post_data.get("content_md", ""),
+        content_html    = post_data.get("content_html", content_html),
+        tags            = tags,
+        thumbnail_title = post_data.get("thumbnail_title", ""),
+        notion_tag      = post_data.get("notion_tag", "📝 일반"),
+        category_key    = post_data.get("category_key", "general"),
+        meta_desc       = post_data.get("meta_description", ""),
+        post_type       = post_data.get("post_type", ""),
     )
 
 
-def post_to_notion(title, content_md, tags, thumbnail_title="",
-                   notion_tag="📝 일반", category_key="general",
-                   meta_desc="", post_type="") -> str:
+def post_to_notion(title, content_md, content_html, tags,
+                   thumbnail_title="", notion_tag="📝 일반",
+                   category_key="general", meta_desc="", post_type="") -> str:
 
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -59,10 +54,9 @@ def post_to_notion(title, content_md, tags, thumbnail_title="",
         "Notion-Version": "2022-06-28",
     }
 
-    # ── Notion 블록 생성 ─────────────────────────────────────
     blocks = []
 
-    # 메타 정보 callout
+    # ── 1. 메타 정보 Callout ─────────────────────────────────
     meta_lines = []
     if thumbnail_title:
         meta_lines.append(f"🖼️ 썸네일: {thumbnail_title}")
@@ -71,36 +65,65 @@ def post_to_notion(title, content_md, tags, thumbnail_title="",
     if post_type:
         meta_lines.append(f"📋 타입: {post_type}")
     if tags:
-        meta_lines.append(f"🏷️ 태그: {' '.join(['#' + t for t in tags[:10]])}")
+        meta_lines.append(f"🏷️ 태그: {' '.join(['#'+t for t in tags[:10]])}")
     if meta_desc:
         meta_lines.append(f"🔍 메타: {meta_desc}")
 
     if meta_lines:
         blocks.append({
-            "object": "block",
-            "type": "callout",
+            "object": "block", "type": "callout",
             "callout": {
                 "rich_text": [{"type": "text", "text": {"content": "\n".join(meta_lines)}}],
-                "icon": {"emoji": "📋"},
-                "color": "blue_background"
+                "icon": {"emoji": "📋"}, "color": "blue_background"
             }
         })
-        blocks.append({"object": "block", "type": "divider", "divider": {}})
 
-    # 본문 파싱
-    import re
-    lines = content_md.split('\n')
-    i = 0
-    code_buffer = []
-    in_code = False
-    code_lang = ""
+    # ── 2. 티스토리 HTML 복붙용 토글 ────────────────────────
+    # HTML을 2000자 단위로 청크 분할 (Notion 블록 제한)
+    html_chunks = []
+    chunk_size = 1900
+    html_clean = content_html.replace("\n", " ")
+    for i in range(0, len(html_clean), chunk_size):
+        html_chunks.append(html_clean[i:i+chunk_size])
+
+    # 토글 블록 안에 코드 청크 넣기
+    toggle_children = []
+    for idx, chunk in enumerate(html_chunks[:20]):  # 최대 20청크
+        toggle_children.append({
+            "object": "block", "type": "code",
+            "code": {
+                "rich_text": [{"type": "text", "text": {"content": chunk}}],
+                "language": "html"
+            }
+        })
+
+    blocks.append({
+        "object": "block", "type": "toggle",
+        "toggle": {
+            "rich_text": [{"type": "text", "text": {
+                "content": "📋 티스토리 HTML 복붙용 코드 (클릭해서 열기)"
+            }}],
+            "color": "green_background",
+            "children": toggle_children
+        }
+    })
+
+    blocks.append({"object": "block", "type": "divider", "divider": {}})
+
+    # ── 3. 본문 마크다운 블록 ────────────────────────────────
     supported_langs = {
         "python", "javascript", "typescript", "bash", "shell",
         "json", "yaml", "sql", "html", "css", "java", "go",
         "rust", "kotlin", "swift", "c", "cpp", "plain text"
     }
 
-    while i < len(lines):
+    lines = content_md.split('\n')
+    i = 0
+    code_buffer = []
+    in_code = False
+    code_lang = ""
+
+    while i < len(lines) and len(blocks) < 95:
         line = lines[i]
 
         if line.startswith('```'):
@@ -112,7 +135,9 @@ def post_to_notion(title, content_md, tags, thumbnail_title="",
                 blocks.append({
                     "object": "block", "type": "code",
                     "code": {
-                        "rich_text": [{"type": "text", "text": {"content": '\n'.join(code_buffer)[:1900]}}],
+                        "rich_text": [{"type": "text", "text": {
+                            "content": '\n'.join(code_buffer)[:1900]
+                        }}],
                         "language": code_lang if code_lang in supported_langs else "plain text"
                     }
                 })
@@ -126,6 +151,7 @@ def post_to_notion(title, content_md, tags, thumbnail_title="",
             i += 1
             continue
 
+        stripped = line.strip()
         if line.startswith('### '):
             blocks.append({"object": "block", "type": "heading_3",
                 "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:].strip()}}]}})
@@ -135,19 +161,21 @@ def post_to_notion(title, content_md, tags, thumbnail_title="",
         elif line.startswith('# '):
             blocks.append({"object": "block", "type": "heading_1",
                 "heading_1": {"rich_text": [{"type": "text", "text": {"content": line[2:].strip()}}]}})
-        elif line.strip() == '---':
+        elif stripped == '---':
             blocks.append({"object": "block", "type": "divider", "divider": {}})
-        elif line.strip():
-            text = line.strip()[:1900]
+        elif stripped:
             blocks.append({
                 "object": "block", "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": text}}]}
+                "paragraph": {"rich_text": [{"type": "text", "text": {
+                    "content": stripped[:1900]
+                }}]}
             })
         i += 1
 
-    # ── Notion API 호출 ──────────────────────────────────────
+    # ── 4. Notion API 호출 ───────────────────────────────────
     print(f"📝 Notion 저장 중: {title}")
     print(f"   📂 {notion_tag} ({category_key})")
+    print(f"   📄 HTML 청크: {len(html_chunks)}개")
 
     resp = requests.post(
         "https://api.notion.com/v1/pages",
@@ -156,7 +184,9 @@ def post_to_notion(title, content_md, tags, thumbnail_title="",
             "parent": {"page_id": NOTION_PAGE_ID},
             "icon": {"emoji": "📝"},
             "properties": {
-                "title": {"title": [{"type": "text", "text": {"content": f"[{category_key.upper()}] {title}"}}]}
+                "title": {"title": [{"type": "text", "text": {
+                    "content": f"[{category_key.upper()}] {title}"
+                }}]}
             },
             "children": blocks[:100]
         },
@@ -174,7 +204,7 @@ def post_to_notion(title, content_md, tags, thumbnail_title="",
         f"📌 제목: {title}\n"
         f"📂 카테고리: {notion_tag}\n"
         f"📝 Notion: {notion_url}\n"
-        f"→ 확인 후 티스토리에 복붙하세요!"
+        f"→ Notion 열어서 HTML 토글 복사 → 티스토리 HTML 모드에 붙여넣기!"
     )
     return notion_url
 
@@ -186,4 +216,8 @@ if __name__ == "__main__":
         sys.exit(1)
     with open(sys.argv[1], "r", encoding="utf-8") as f:
         d = json.load(f)
-    post_to_tistory(title=d["title"], content_html=d.get("content_html",""), tags=d.get("tags",[]))
+    post_to_tistory(
+        title=d["title"],
+        content_html=d.get("content_html", ""),
+        tags=d.get("tags", [])
+    )
