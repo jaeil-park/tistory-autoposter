@@ -38,8 +38,8 @@ def post_to_tistory(title: str, content_html: str, tags: list, category_id: str 
     })
 
     # SESSION_ID 쿠키 설정
-    session.cookies.set("SESSION_ID", TISTORY_SESSION_ID, domain=".tistory.com")
-    session.cookies.set("SESSION_ID", TISTORY_SESSION_ID, domain=f"{TISTORY_BLOG}.tistory.com")
+    session.cookies.set("TSSESSION", TISTORY_SESSION_ID, domain=".tistory.com")
+    session.cookies.set("TSSESSION", TISTORY_SESSION_ID, domain=f"{TISTORY_BLOG}.tistory.com")
 
     # 글쓰기 페이지에서 CSRF 토큰 획득
     print("🔑 CSRF 토큰 획득 중...")
