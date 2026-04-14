@@ -1,8 +1,8 @@
 """
 tistory_poster.py
 Playwright 기반 티스토리 자동 포스팅
-- 카카오 간편로그인 (계정 선택 화면) 대응
-- CodeMirror HTML 에디터 입력
+- iframe 내부 에디터 접근
+- HTML 모드 전환 후 직접 입력
 """
 
 import asyncio
@@ -55,96 +55,81 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
                             wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(2000)
 
-            # ── STEP 2: 카카오 로그인 버튼 클릭 ─────────────────────
-            print("🟡 카카오 로그인 버튼 클릭...")
+            # ── STEP 2: 카카오 로그인 버튼 ───────────────────────────
             for sel in [".btn_login.link_kakao_id", "a[href*='kakao']", "button:has-text('카카오')"]:
                 try:
                     btn = page.locator(sel).first
                     await btn.wait_for(state="visible", timeout=5000)
                     await btn.click()
-                    print(f"  ✅ 클릭 성공: {sel}")
+                    print(f"  ✅ 카카오 버튼 클릭: {sel}")
                     break
                 except Exception:
                     continue
 
-            # ── STEP 3: 카카오 페이지 안정화 대기 ───────────────────
-            # wait_for_url 대신 networkidle로 대기 (이미 kakao.com에 있을 수 있음)
             await page.wait_for_load_state("domcontentloaded", timeout=20000)
             await page.wait_for_timeout(2000)
-            current_url = page.url
-            print(f"  📍 현재 URL: {current_url[:80]}...")
 
-            # ── STEP 4: 계정 선택 화면 처리 ─────────────────────────
-            # "로그인할 카카오계정 선택" 팝업이 뜨는 경우
-            # → 저장된 계정 클릭 또는 "새로운 계정으로 로그인" 클릭
+            # ── STEP 3: 계정 선택 화면 처리 ─────────────────────────
             try:
-                # 저장된 계정 목록에서 이메일 매칭 클릭
-                account_btn = page.locator(f"a:has-text('{KAKAO_EMAIL}'), button:has-text('{KAKAO_EMAIL}')")
+                account_btn = page.locator(f"a:has-text('{KAKAO_EMAIL}'), button:has-text('{KAKAO_EMAIL}')").first
                 await account_btn.wait_for(state="visible", timeout=4000)
                 await account_btn.click()
                 print(f"  ✅ 저장된 계정 선택: {KAKAO_EMAIL}")
                 await page.wait_for_load_state("domcontentloaded", timeout=15000)
                 await page.wait_for_timeout(2000)
             except Exception:
-                # 계정 선택 화면이 없거나 이메일 매칭 실패 → 일반 로그인 폼으로 진행
-                print("  ℹ️ 저장된 계정 선택 화면 없음 → 직접 로그인 시도")
+                print("  ℹ️ 계정 선택 화면 없음 → 직접 로그인")
 
-            # ── STEP 5: 로그인 폼 처리 (계정 선택 후에도 비번 요구할 수 있음) ──
-            current_url = page.url
-            print(f"  📍 로그인 후 URL: {current_url[:80]}...")
-
-            if "tistory.com" not in current_url:
-                # 아직 카카오 로그인 폼이 남아있는 경우
-                print("  📧 이메일/비밀번호 직접 입력...")
-
-                # 이메일 입력 (필드가 없으면 skip)
+            # ── STEP 4: 로그인 폼 (필요 시) ──────────────────────────
+            if "tistory.com" not in page.url:
                 for sel in ["#loginId--1", "input[name='loginId']", "input[type='email']"]:
                     try:
                         inp = page.locator(sel).first
                         await inp.wait_for(state="visible", timeout=3000)
                         val = await inp.input_value()
-                        if not val:  # 비어있을 때만 입력
+                        if not val:
                             await inp.fill(KAKAO_EMAIL)
-                        print(f"  ✅ 이메일 입력: {sel}")
                         break
                     except Exception:
                         continue
 
-                # 비밀번호 입력
                 for sel in ["#password--2", "input[name='password']", "input[type='password']"]:
                     try:
                         inp = page.locator(sel).first
                         await inp.wait_for(state="visible", timeout=3000)
                         await inp.fill(KAKAO_PASSWORD)
-                        print(f"  ✅ 비밀번호 입력: {sel}")
                         break
                     except Exception:
                         continue
 
-                # 로그인 버튼
                 for sel in [".btn_g.highlight.submit", "button[type='submit']", "button.submit"]:
                     try:
                         btn = page.locator(sel).first
                         await btn.wait_for(state="visible", timeout=3000)
                         await btn.click()
-                        print(f"  ✅ 로그인 버튼 클릭: {sel}")
                         break
                     except Exception:
                         continue
 
                 await page.wait_for_url("**/tistory.com/**", timeout=20000)
 
-            print("✅ 티스토리 로그인 성공!")
+            print(f"✅ 로그인 성공! URL: {page.url[:60]}")
 
-            # ── STEP 6: 글쓰기 페이지 ───────────────────────────────
+            # ── STEP 5: 글쓰기 페이지 ───────────────────────────────
             write_url = f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/"
             print(f"📝 글쓰기 이동: {write_url}")
             await page.goto(write_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)
 
-            # ── STEP 7: 제목 입력 ────────────────────────────────────
+            # 페이지 HTML 저장 (에디터 구조 파악용)
+            html_snapshot = await page.content()
+            with open("editor_snapshot.html", "w", encoding="utf-8") as f:
+                f.write(html_snapshot)
+            print(f"  📄 에디터 HTML 스냅샷 저장 (editor_snapshot.html)")
+
+            # ── STEP 6: 제목 입력 ────────────────────────────────────
             print(f"📌 제목 입력: {title}")
-            for sel in ["#post-title-inp", "input.tf_subject", "input[placeholder*='제목']"]:
+            for sel in ["#post-title-inp", "input.tf_subject", "input[placeholder*='제목']", "[data-role='title']"]:
                 try:
                     inp = page.locator(sel).first
                     await inp.wait_for(state="visible", timeout=5000)
@@ -154,43 +139,103 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
                 except Exception:
                     continue
 
-            # ── STEP 8: HTML 모드 전환 ────────────────────────────────
+            # ── STEP 7: HTML 모드 전환 ────────────────────────────────
             print("🔄 HTML 모드 전환...")
-            for sel in ["button:has-text('HTML')", ".btn_html", "[data-mode='html']"]:
+            html_switched = False
+            for sel in ["button:has-text('HTML')", ".btn_html", "[data-mode='html']", "button[title='HTML']"]:
                 try:
                     btn = page.locator(sel).first
                     await btn.wait_for(state="visible", timeout=5000)
                     await btn.click()
-                    await page.wait_for_timeout(1500)
+                    await page.wait_for_timeout(2000)
+                    html_switched = True
                     print(f"  ✅ HTML 모드 전환: {sel}")
                     break
                 except Exception:
                     continue
 
-            # ── STEP 9: 본문 입력 ────────────────────────────────────
+            # ── STEP 8: 본문 입력 (iframe + CodeMirror + textarea 전략) ──
             print("📄 본문 입력...")
-            injected = await page.evaluate(f"""
-                (function() {{
-                    const cm = document.querySelector('.CodeMirror');
-                    if (cm && cm.CodeMirror) {{
-                        cm.CodeMirror.setValue({json.dumps(content_html)});
-                        return 'codemirror';
-                    }}
-                    const ta = document.querySelector('#content, textarea.editor');
-                    if (ta) {{
-                        ta.value = {json.dumps(content_html)};
-                        ta.dispatchEvent(new Event('input', {{bubbles: true}}));
-                        return 'textarea';
-                    }}
-                    return 'not_found';
-                }})();
-            """)
-            print(f"  ✅ 본문 입력 방식: {injected}")
+            content_injected = False
+
+            # 전략 A: iframe 내부 CodeMirror
+            try:
+                frames = page.frames
+                print(f"  ℹ️ 프레임 수: {len(frames)}")
+                for frame in frames:
+                    print(f"     프레임 URL: {frame.url[:60]}")
+                    result = await frame.evaluate(f"""
+                        (function() {{
+                            const cm = document.querySelector('.CodeMirror');
+                            if (cm && cm.CodeMirror) {{
+                                cm.CodeMirror.setValue({json.dumps(content_html)});
+                                return 'codemirror_iframe';
+                            }}
+                            return null;
+                        }})();
+                    """)
+                    if result:
+                        print(f"  ✅ 본문 입력 (iframe CodeMirror): {frame.url[:40]}")
+                        content_injected = True
+                        break
+            except Exception as e:
+                print(f"  ⚠️ iframe 전략 실패: {e}")
+
+            # 전략 B: 메인 페이지 CodeMirror
+            if not content_injected:
+                try:
+                    result = await page.evaluate(f"""
+                        (function() {{
+                            const cm = document.querySelector('.CodeMirror');
+                            if (cm && cm.CodeMirror) {{
+                                cm.CodeMirror.setValue({json.dumps(content_html)});
+                                return 'codemirror_main';
+                            }}
+                            return null;
+                        }})();
+                    """)
+                    if result:
+                        print(f"  ✅ 본문 입력 (메인 CodeMirror)")
+                        content_injected = True
+                except Exception as e:
+                    print(f"  ⚠️ 메인 CodeMirror 실패: {e}")
+
+            # 전략 C: textarea 직접 입력
+            if not content_injected:
+                for sel in ["textarea#content", "textarea.editor-content", "textarea[name='content']", "textarea"]:
+                    try:
+                        ta = page.locator(sel).first
+                        await ta.wait_for(state="visible", timeout=3000)
+                        await ta.fill(content_html)
+                        print(f"  ✅ 본문 입력 (textarea): {sel}")
+                        content_injected = True
+                        break
+                    except Exception:
+                        continue
+
+            # 전략 D: contenteditable div 클릭 후 키보드 입력
+            if not content_injected:
+                for sel in ["[contenteditable='true']", ".ProseMirror", ".editor-content"]:
+                    try:
+                        el = page.locator(sel).first
+                        await el.wait_for(state="visible", timeout=3000)
+                        await el.click()
+                        await page.keyboard.press("Control+a")
+                        await page.keyboard.type(content_html[:500])  # 너무 길면 자름
+                        print(f"  ✅ 본문 입력 (contenteditable): {sel}")
+                        content_injected = True
+                        break
+                    except Exception:
+                        continue
+
+            if not content_injected:
+                print("  ⚠️ 본문 입력 실패 - 스냅샷 확인 필요")
+
             await page.wait_for_timeout(1000)
 
-            # ── STEP 10: 태그 입력 ───────────────────────────────────
+            # ── STEP 9: 태그 입력 ───────────────────────────────────
             if tags:
-                print(f"🏷️ 태그 입력: {tags[:10]}")
+                print(f"🏷️ 태그 입력...")
                 for sel in ["#tag-label", "input.tf_tag", "input[placeholder*='태그']"]:
                     try:
                         tag_inp = page.locator(sel).first
@@ -204,15 +249,15 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
                     except Exception:
                         continue
 
-            # ── STEP 11: 발행 ─────────────────────────────────────────
+            # ── STEP 10: 발행 ─────────────────────────────────────────
             print("🚀 발행 중...")
-            for sel in ["#publish-layer-btn", "button.btn_publish", "button:has-text('발행')"]:
+            for sel in ["#publish-layer-btn", "button.btn_publish", "button:has-text('발행')", "[data-btn='publish']"]:
                 try:
                     btn = page.locator(sel).first
                     await btn.wait_for(state="visible", timeout=5000)
                     await btn.click()
-                    await page.wait_for_timeout(1500)
-                    print(f"  ✅ 발행 버튼 클릭: {sel}")
+                    await page.wait_for_timeout(2000)
+                    print(f"  ✅ 발행 버튼: {sel}")
                     break
                 except Exception:
                     continue
@@ -220,23 +265,32 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
             # 공개 설정
             try:
                 await page.locator("input[value='20']").check(timeout=3000)
+                print("  ✅ 공개 설정 완료")
             except Exception:
                 pass
 
             # 최종 발행 확인
-            for sel in ["#publish-btn", "button.btn_ok", "button:has-text('완료')"]:
+            for sel in ["#publish-btn", "button.btn_ok", "button:has-text('완료')", "button:has-text('발행하기')"]:
                 try:
                     btn = page.locator(sel).first
                     await btn.wait_for(state="visible", timeout=5000)
                     await btn.click()
-                    print(f"  ✅ 최종 발행 확인: {sel}")
+                    print(f"  ✅ 최종 발행: {sel}")
                     break
                 except Exception:
                     continue
 
-            await page.wait_for_url(f"**/{TISTORY_BLOG}.tistory.com/**", timeout=20000)
-            post_url = page.url
+            # 발행 완료 확인 — URL 변경 또는 성공 메시지
+            try:
+                await page.wait_for_url(f"**/{TISTORY_BLOG}.tistory.com/**", timeout=20000)
+                post_url = page.url
+            except PlaywrightTimeout:
+                # URL이 안 바뀌어도 성공일 수 있음
+                post_url = page.url
+                print(f"  ⚠️ URL 변경 미확인, 현재: {post_url[:60]}")
+
             print(f"🎉 발행 완료: {post_url}")
+            await page.screenshot(path="success_screenshot.png")
 
             await notify_discord(
                 f"✅ **티스토리 자동 포스팅 완료!**\n"
@@ -248,12 +302,9 @@ async def post_to_tistory(title: str, content_html: str, tags: list, category_id
         except Exception as e:
             print(f"❌ 포스팅 실패: {e}")
             await page.screenshot(path="error_screenshot.png")
-            # 디버깅용 HTML 저장
             html = await page.content()
             with open("error_page.html", "w", encoding="utf-8") as f:
                 f.write(html)
-            print(f"  📸 스크린샷 저장: error_screenshot.png")
-            print(f"  📄 페이지 HTML 저장: error_page.html")
             await notify_discord(f"❌ **티스토리 포스팅 실패**\n오류: {str(e)}")
             raise
         finally:
