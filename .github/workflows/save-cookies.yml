@@ -1,0 +1,38 @@
+name: 🍪 Save Kakao Login Cookies
+
+on:
+  workflow_dispatch:  # 수동 실행만
+
+jobs:
+  save-cookies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install playwright python-dotenv
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 🍪 Extract Cookies via Login
+        env:
+          KAKAO_EMAIL:    ${{ secrets.KAKAO_EMAIL }}
+          KAKAO_PASSWORD: ${{ secrets.KAKAO_PASSWORD }}
+          TISTORY_BLOG:   ${{ secrets.TISTORY_BLOG }}
+        run: python extract_cookies.py
+
+      - name: 💾 Upload cookies artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tistory-cookies
+          path: cookies.json
+          retention-days: 1
