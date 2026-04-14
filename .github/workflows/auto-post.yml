@@ -18,7 +18,8 @@ on:
 env:
   ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
   TISTORY_BLOG:        ${{ secrets.TISTORY_BLOG }}
-  TISTORY_SESSION_ID:  ${{ secrets.TISTORY_SESSION_ID }}
+  NOTION_TOKEN:        ${{ secrets.NOTION_TOKEN }}
+  NOTION_PAGE_ID:      ${{ secrets.NOTION_PAGE_ID }}
   DISCORD_WEBHOOK:     ${{ secrets.DISCORD_WEBHOOK }}
   POST_TOPIC:          ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
   TISTORY_CATEGORY_ID: ${{ github.event.inputs.category_id || '0' }}
@@ -41,10 +42,10 @@ jobs:
       - name: 📦 Install dependencies
         run: pip install -r requirements.txt
 
-      - name: 🚀 Generate & Publish Post
+      - name: 🚀 Generate & Save to Notion
         run: python run.py
 
-      - name: 💾 Upload artifacts
+      - name: 💾 Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -57,4 +58,4 @@ jobs:
         run: |
           curl -s -X POST "$DISCORD_WEBHOOK" \
             -H "Content-Type: application/json" \
-            -d "{\"content\": \"❌ **티스토리 포스팅 실패** (Run #${{ github.run_number }})\n주제: $POST_TOPIC\n로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" || true
+            -d "{\"content\": \"❌ **포스팅 실패** (Run #${{ github.run_number }})\n주제: $POST_TOPIC\"}" || true

@@ -1,17 +1,17 @@
 """
-tistory_poster.py - v10
-티스토리 내부 JSON API 직접 호출
-네트워크 탭 분석 기반: /apis/post/write 엔드포인트
+tistory_poster.py - v11 (Notion API 저장)
+티스토리 직접 발행 대신 Notion에 포스트 저장
+Notion에서 확인 후 티스토리에 복붙
 """
 
 import os
-import re
 import json
 import requests
 
-TISTORY_BLOG       = os.environ["TISTORY_BLOG"]
-TISTORY_SESSION_ID = os.environ["TISTORY_SESSION_ID"]
-DISCORD_WEBHOOK    = os.getenv("DISCORD_WEBHOOK", "")
+TISTORY_BLOG    = os.environ.get("TISTORY_BLOG", "")
+NOTION_TOKEN    = os.environ["NOTION_TOKEN"]
+NOTION_PAGE_ID  = os.environ["NOTION_PAGE_ID"]   # 허브 페이지 ID
+DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 
 
 def notify_discord(message: str):
@@ -23,157 +23,168 @@ def notify_discord(message: str):
         pass
 
 
-def get_csrf_token(session: requests.Session) -> str:
-    """관리자 페이지에서 CSRF 토큰 추출"""
-    resp = session.get(
-        f"https://{TISTORY_BLOG}.tistory.com/manage",
-        timeout=15
+def post_to_notion(title: str, content_md: str, tags: list, thumbnail_title: str = "") -> str:
+    """Notion에 블로그 포스트 저장"""
+
+    headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+    }
+
+    # 마크다운을 Notion 블록으로 변환 (간단 버전)
+    blocks = []
+
+    # 썸네일 제목
+    if thumbnail_title:
+        blocks.append({
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "rich_text": [{"type": "text", "text": {"content": f"🖼️ 썸네일 제목: {thumbnail_title}"}}],
+                "icon": {"emoji": "🖼️"},
+                "color": "blue_background"
+            }
+        })
+
+    # 태그
+    if tags:
+        blocks.append({
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "rich_text": [{"type": "text", "text": {"content": f"🏷️ 태그: {' '.join(['#' + t for t in tags[:10]])}"}}],
+                "icon": {"emoji": "🏷️"},
+                "color": "green_background"
+            }
+        })
+
+    # 구분선
+    blocks.append({"object": "block", "type": "divider", "divider": {}})
+
+    # 본문을 줄 단위로 Notion 블록으로 변환
+    lines = content_md.split('\n')
+    i = 0
+    code_buffer = []
+    in_code = False
+    code_lang = ""
+
+    while i < len(lines):
+        line = lines[i]
+
+        # 코드블록 처리
+        if line.startswith('```'):
+            if not in_code:
+                in_code = True
+                code_lang = line[3:].strip() or "plain text"
+                code_buffer = []
+            else:
+                # 코드블록 종료
+                blocks.append({
+                    "object": "block",
+                    "type": "code",
+                    "code": {
+                        "rich_text": [{"type": "text", "text": {"content": '\n'.join(code_buffer)[:1900]}}],
+                        "language": code_lang if code_lang in [
+                            "python", "javascript", "typescript", "bash", "shell",
+                            "json", "yaml", "sql", "html", "css", "java", "go",
+                            "rust", "kotlin", "swift", "c", "cpp", "plain text"
+                        ] else "plain text"
+                    }
+                })
+                in_code = False
+                code_buffer = []
+            i += 1
+            continue
+
+        if in_code:
+            code_buffer.append(line)
+            i += 1
+            continue
+
+        # 헤딩
+        if line.startswith('### '):
+            blocks.append({"object": "block", "type": "heading_3",
+                "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:].strip()}}]}})
+        elif line.startswith('## '):
+            blocks.append({"object": "block", "type": "heading_2",
+                "heading_2": {"rich_text": [{"type": "text", "text": {"content": line[3:].strip()}}]}})
+        elif line.startswith('# '):
+            blocks.append({"object": "block", "type": "heading_1",
+                "heading_1": {"rich_text": [{"type": "text", "text": {"content": line[2:].strip()}}]}})
+        # 구분선
+        elif line.strip() == '---':
+            blocks.append({"object": "block", "type": "divider", "divider": {}})
+        # 빈 줄
+        elif not line.strip():
+            pass
+        # 일반 텍스트 (볼드 처리)
+        else:
+            text = line.strip()
+            if len(text) > 1900:
+                text = text[:1900] + "..."
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {"rich_text": [{"type": "text", "text": {"content": text}}]}
+            })
+
+        i += 1
+
+    # Notion API: 페이지 생성
+    print(f"📝 Notion에 페이지 생성 중: {title}")
+
+    payload = {
+        "parent": {"page_id": NOTION_PAGE_ID},
+        "icon": {"emoji": "📝"},
+        "properties": {
+            "title": {
+                "title": [{"type": "text", "text": {"content": title}}]
+            }
+        },
+        "children": blocks[:100]  # Notion API 한 번에 최대 100블록
+    }
+
+    resp = requests.post(
+        "https://api.notion.com/v1/pages",
+        headers=headers,
+        json=payload,
+        timeout=30
     )
-    # meta 태그에서 추출
-    m = re.search(r'<meta[^>]+name=["\']_csrf["\'][^>]+content=["\']([^"\']+)["\']', resp.text)
-    if m:
-        return m.group(1)
-    # JS 변수에서 추출
-    m = re.search(r'["\']?_csrf["\']?\s*[:=]\s*["\']([a-zA-Z0-9\-]{20,})["\']', resp.text)
-    if m:
-        return m.group(1)
-    return ""
+
+    if resp.status_code != 200:
+        raise Exception(f"Notion API 오류: {resp.status_code}\n{resp.text[:300]}")
+
+    page_data = resp.json()
+    notion_url = page_data.get("url", "")
+    print(f"✅ Notion 저장 완료: {notion_url}")
+
+    notify_discord(
+        f"✅ **티스토리 포스트 Notion 저장 완료!**\n"
+        f"📌 제목: {title}\n"
+        f"📝 Notion: {notion_url}\n"
+        f"→ 확인 후 티스토리에 복붙하세요!"
+    )
+
+    return notion_url
 
 
 def post_to_tistory(title: str, content_html: str, tags: list, category_id: str = "0") -> str:
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-    })
-    session.cookies.set("TSSESSION", TISTORY_SESSION_ID, domain=".tistory.com")
+    """Notion에 저장 (티스토리 대체)"""
 
-    # ── Step 1: 세션 유효성 확인 ─────────────────────────────
-    print("🔑 세션 확인...")
-    resp = session.get(
-        f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/",
-        timeout=15, allow_redirects=True
-    )
-    print(f"  STATUS: {resp.status_code} | URL: {resp.url[:70]}")
+    # post_output.json에서 마크다운 읽기
+    content_md = content_html  # fallback
+    thumbnail_title = ""
 
-    if "auth/login" in resp.url or resp.status_code == 401:
-        raise Exception("❌ TSSESSION 만료 — Secret을 새로 업데이트하세요.")
+    try:
+        with open("post_output.json", "r", encoding="utf-8") as f:
+            post_data = json.load(f)
+            content_md = post_data.get("content_md", content_html)
+            thumbnail_title = post_data.get("thumbnail_title", "")
+    except Exception:
+        pass
 
-    # ── Step 2: CSRF 토큰 획득 ───────────────────────────────
-    csrf = get_csrf_token(session)
-    print(f"  CSRF: {csrf[:20] if csrf else '없음'}")
-
-    # ── Step 3: API 방식 1 — JSON API ────────────────────────
-    print("🚀 방식 1: JSON API...")
-    session.headers.update({
-        "Content-Type": "application/json;charset=UTF-8",
-        "Accept":       "application/json, text/plain, */*",
-        "Referer":      f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/",
-        "Origin":       f"https://{TISTORY_BLOG}.tistory.com",
-        "X-Requested-With": "XMLHttpRequest",
-    })
-    if csrf:
-        session.headers["X-CSRF-TOKEN"] = csrf
-
-    payload = {
-        "title":          title,
-        "content":        content_html,
-        "visibility":     20,
-        "categoryId":     int(category_id),
-        "tag":            ",".join(tags[:10]),
-        "acceptComment":  1,
-        "published":      None,
-        "slogan":         "",
-        "password":       "",
-        "postType":       "NORMAL",
-    }
-
-    for endpoint in [
-        f"https://{TISTORY_BLOG}.tistory.com/manage/api/post",
-        f"https://{TISTORY_BLOG}.tistory.com/manage/api/post/write",
-        f"https://{TISTORY_BLOG}.tistory.com/manage/posts/api",
-    ]:
-        try:
-            r = session.post(endpoint, json=payload, timeout=20)
-            print(f"  {endpoint.split('/manage/')[1]}: {r.status_code}")
-            if r.status_code in [200, 201]:
-                try:
-                    data = r.json()
-                    post_id = (data.get("postId") or data.get("id") or
-                               data.get("data", {}).get("postId") or
-                               data.get("result", {}).get("postId"))
-                    if post_id:
-                        url = f"https://{TISTORY_BLOG}.tistory.com/{post_id}"
-                        print(f"🎉 발행 완료 (JSON API): {url}")
-                        notify_discord(f"✅ **티스토리 포스팅 완료!**\n📌 {title}\n🔗 {url}")
-                        return url
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"  오류: {e}")
-
-    # ── Step 4: 방식 2 — multipart/form-data ─────────────────
-    print("🚀 방식 2: multipart form...")
-    session.headers.pop("Content-Type", None)
-    session.headers.pop("X-CSRF-TOKEN", None)
-    session.headers["Accept"] = "application/json, text/plain, */*"
-
-    form_data = {
-        "title":         (None, title),
-        "content":       (None, content_html),
-        "visibility":    (None, "20"),
-        "categoryId":    (None, category_id),
-        "tag":           (None, ",".join(tags[:10])),
-        "acceptComment": (None, "1"),
-        "postType":      (None, "NORMAL"),
-    }
-    if csrf:
-        form_data["_csrf"] = (None, csrf)
-
-    for endpoint in [
-        f"https://{TISTORY_BLOG}.tistory.com/manage/api/post",
-        f"https://{TISTORY_BLOG}.tistory.com/manage/post/write",
-    ]:
-        try:
-            r = session.post(endpoint, files=form_data, timeout=20)
-            print(f"  {endpoint.split('/manage/')[1]}: {r.status_code} | {r.url[:60]}")
-            if r.status_code in [200, 201, 302]:
-                # URL에서 포스트 ID 추출
-                post_id_m = re.search(rf"/{TISTORY_BLOG}\.tistory\.com/(\d+)", r.url)
-                if not post_id_m:
-                    post_id_m = re.search(r'/(\d+)(?:\?|$)', r.url)
-                if post_id_m:
-                    url = f"https://{TISTORY_BLOG}.tistory.com/{post_id_m.group(1)}"
-                    print(f"🎉 발행 완료 (form): {url}")
-                    notify_discord(f"✅ **티스토리 포스팅 완료!**\n📌 {title}\n🔗 {url}")
-                    return url
-                # 응답 본문에서 ID 추출
-                id_m = re.search(r'"(?:postId|id)"\s*:\s*(\d+)', r.text)
-                if id_m:
-                    url = f"https://{TISTORY_BLOG}.tistory.com/{id_m.group(1)}"
-                    print(f"🎉 발행 완료 (본문): {url}")
-                    notify_discord(f"✅ **티스토리 포스팅 완료!**\n📌 {title}\n🔗 {url}")
-                    return url
-        except Exception as e:
-            print(f"  오류: {e}")
-
-    # ── Step 5: 디버깅 정보 수집 ─────────────────────────────
-    print("\n🔍 네트워크 엔드포인트 탐색...")
-    debug_resp = session.get(
-        f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/",
-        timeout=15
-    )
-    # JS 번들에서 API 엔드포인트 힌트 추출
-    api_hints = re.findall(r'["\']/(manage/[^"\']+/(?:write|post|save|create)[^"\']*)["\']', debug_resp.text)
-    print(f"  발견된 API 힌트: {api_hints[:10]}")
-
-    raise Exception(
-        "모든 API 방식 실패.\n"
-        "브라우저 개발자도구 → Network 탭 → 글 저장 시 호출되는 API URL을 확인해주세요."
-    )
+    return post_to_notion(title, content_md, tags, thumbnail_title)
 
 
 if __name__ == "__main__":
@@ -185,7 +196,6 @@ if __name__ == "__main__":
         post_data = json.load(f)
     post_to_tistory(
         title=post_data["title"],
-        content_html=post_data["content_html"],
+        content_html=post_data.get("content_html", ""),
         tags=post_data.get("tags", []),
-        category_id=post_data.get("category_id", "0")
     )
