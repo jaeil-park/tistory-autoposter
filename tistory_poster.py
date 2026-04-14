@@ -1,7 +1,7 @@
 """
-tistory_poster.py - v9
-티스토리 관리자 글쓰기 폼 직접 POST 방식
-실제 form action URL 사용
+tistory_poster.py - v10
+티스토리 내부 JSON API 직접 호출
+네트워크 탭 분석 기반: /apis/post/write 엔드포인트
 """
 
 import os
@@ -16,10 +16,28 @@ DISCORD_WEBHOOK    = os.getenv("DISCORD_WEBHOOK", "")
 
 def notify_discord(message: str):
     if not DISCORD_WEBHOOK:
-        try:
-            requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=5)
-        except Exception:
-            pass
+        return
+    try:
+        requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=5)
+    except Exception:
+        pass
+
+
+def get_csrf_token(session: requests.Session) -> str:
+    """관리자 페이지에서 CSRF 토큰 추출"""
+    resp = session.get(
+        f"https://{TISTORY_BLOG}.tistory.com/manage",
+        timeout=15
+    )
+    # meta 태그에서 추출
+    m = re.search(r'<meta[^>]+name=["\']_csrf["\'][^>]+content=["\']([^"\']+)["\']', resp.text)
+    if m:
+        return m.group(1)
+    # JS 변수에서 추출
+    m = re.search(r'["\']?_csrf["\']?\s*[:=]\s*["\']([a-zA-Z0-9\-]{20,})["\']', resp.text)
+    if m:
+        return m.group(1)
+    return ""
 
 
 def post_to_tistory(title: str, content_html: str, tags: list, category_id: str = "0") -> str:
@@ -31,131 +49,131 @@ def post_to_tistory(title: str, content_html: str, tags: list, category_id: str 
             "Chrome/124.0.0.0 Safari/537.36"
         ),
     })
-
-    # TSSESSION 쿠키 설정
     session.cookies.set("TSSESSION", TISTORY_SESSION_ID, domain=".tistory.com")
 
-    # ── Step 1: 글쓰기 페이지 로드해서 form action + CSRF 토큰 파싱 ──
-    print("🔑 글쓰기 페이지 로드...")
-    manage_url = f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/"
-    resp = session.get(manage_url, timeout=20, allow_redirects=True)
+    # ── Step 1: 세션 유효성 확인 ─────────────────────────────
+    print("🔑 세션 확인...")
+    resp = session.get(
+        f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/",
+        timeout=15, allow_redirects=True
+    )
     print(f"  STATUS: {resp.status_code} | URL: {resp.url[:70]}")
 
-    if resp.status_code != 200 or "auth/login" in resp.url:
-        raise Exception(
-            f"❌ 세션 만료\n"
-            f"   URL: {resp.url}\n"
-            f"   TSSESSION을 새로 복사해서 Secret을 업데이트하세요."
-        )
+    if "auth/login" in resp.url or resp.status_code == 401:
+        raise Exception("❌ TSSESSION 만료 — Secret을 새로 업데이트하세요.")
 
-    html = resp.text
-
-    # form action URL 파싱
-    form_action = re.search(r'<form[^>]+action=["\']([^"\']+)["\'][^>]*id=["\']entry-form', html)
-    if not form_action:
-        form_action = re.search(r'id=["\']entry-form["\'][^>]+action=["\']([^"\']+)["\']', html)
-    if not form_action:
-        form_action = re.search(r'action=["\']([^"\']*manage/post[^"\']*)["\']', html)
-
-    action_url = form_action.group(1) if form_action else f"https://{TISTORY_BLOG}.tistory.com/manage/post/write"
-    if action_url.startswith("/"):
-        action_url = f"https://{TISTORY_BLOG}.tistory.com{action_url}"
-    print(f"  Form action: {action_url}")
-
-    # CSRF 토큰 파싱
-    csrf = ""
-    for pattern in [
-        r'name=["\']_csrf["\'][^>]+value=["\']([^"\']+)["\']',
-        r'value=["\']([^"\']+)["\'][^>]+name=["\']_csrf["\']',
-        r'"csrf"\s*:\s*"([^"]+)"',
-        r'_csrf["\s:=]+["\']([a-zA-Z0-9\-]{20,})["\']',
-    ]:
-        m = re.search(pattern, html)
-        if m:
-            csrf = m.group(1)
-            break
+    # ── Step 2: CSRF 토큰 획득 ───────────────────────────────
+    csrf = get_csrf_token(session)
     print(f"  CSRF: {csrf[:20] if csrf else '없음'}")
 
-    # 숨겨진 input 값들 파싱 (form 전체 필드 수집)
-    hidden_inputs = {}
-    for m in re.finditer(r'<input[^>]+type=["\']hidden["\'][^>]*>', html):
-        tag = m.group(0)
-        name_m = re.search(r'name=["\']([^"\']+)["\']', tag)
-        val_m  = re.search(r'value=["\']([^"\']*)["\']', tag)
-        if name_m:
-            hidden_inputs[name_m.group(1)] = val_m.group(1) if val_m else ""
-
-    print(f"  숨겨진 필드: {list(hidden_inputs.keys())}")
-
-    # ── Step 2: 포스트 발행 POST ────────────────────────────────────
-    print("🚀 포스트 발행 중...")
-
-    payload = {**hidden_inputs}  # 숨겨진 필드 전부 포함
-    payload.update({
-        "title":         title,
-        "content":       content_html,
-        "tag":           ",".join(tags[:10]),
-        "categoryId":    category_id,
-        "visibility":    "20",       # 공개
-        "acceptComment": "1",
-        "published":     "",
-        "password":      "",
-        "slogan":        "",
+    # ── Step 3: API 방식 1 — JSON API ────────────────────────
+    print("🚀 방식 1: JSON API...")
+    session.headers.update({
+        "Content-Type": "application/json;charset=UTF-8",
+        "Accept":       "application/json, text/plain, */*",
+        "Referer":      f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/",
+        "Origin":       f"https://{TISTORY_BLOG}.tistory.com",
+        "X-Requested-With": "XMLHttpRequest",
     })
     if csrf:
-        payload["_csrf"] = csrf
+        session.headers["X-CSRF-TOKEN"] = csrf
 
-    session.headers.update({
-        "Referer":       manage_url,
-        "Origin":        f"https://{TISTORY_BLOG}.tistory.com",
-        "Content-Type":  "application/x-www-form-urlencoded",
-    })
+    payload = {
+        "title":          title,
+        "content":        content_html,
+        "visibility":     20,
+        "categoryId":     int(category_id),
+        "tag":            ",".join(tags[:10]),
+        "acceptComment":  1,
+        "published":      None,
+        "slogan":         "",
+        "password":       "",
+        "postType":       "NORMAL",
+    }
 
-    resp2 = session.post(action_url, data=payload, timeout=30, allow_redirects=True)
-    print(f"  STATUS: {resp2.status_code} | URL: {resp2.url[:70]}")
+    for endpoint in [
+        f"https://{TISTORY_BLOG}.tistory.com/manage/api/post",
+        f"https://{TISTORY_BLOG}.tistory.com/manage/api/post/write",
+        f"https://{TISTORY_BLOG}.tistory.com/manage/posts/api",
+    ]:
+        try:
+            r = session.post(endpoint, json=payload, timeout=20)
+            print(f"  {endpoint.split('/manage/')[1]}: {r.status_code}")
+            if r.status_code in [200, 201]:
+                try:
+                    data = r.json()
+                    post_id = (data.get("postId") or data.get("id") or
+                               data.get("data", {}).get("postId") or
+                               data.get("result", {}).get("postId"))
+                    if post_id:
+                        url = f"https://{TISTORY_BLOG}.tistory.com/{post_id}"
+                        print(f"🎉 발행 완료 (JSON API): {url}")
+                        notify_discord(f"✅ **티스토리 포스팅 완료!**\n📌 {title}\n🔗 {url}")
+                        return url
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"  오류: {e}")
 
-    # 성공 여부 확인: 숫자로 끝나는 URL이면 발행 완료
-    post_url = resp2.url
-    if re.search(rf"https://{TISTORY_BLOG}\.tistory\.com/\d+", post_url):
-        print(f"🎉 발행 완료: {post_url}")
-        notify_discord(
-            f"✅ **티스토리 자동 포스팅 완료!**\n"
-            f"📌 제목: {title}\n"
-            f"🔗 URL: {post_url}"
-        )
-        return post_url
+    # ── Step 4: 방식 2 — multipart/form-data ─────────────────
+    print("🚀 방식 2: multipart form...")
+    session.headers.pop("Content-Type", None)
+    session.headers.pop("X-CSRF-TOKEN", None)
+    session.headers["Accept"] = "application/json, text/plain, */*"
 
-    # 리다이렉트된 URL에서 포스트 ID 추출 시도
-    post_id = re.search(r'/(\d+)(?:\?|$|#)', post_url)
-    if post_id:
-        final_url = f"https://{TISTORY_BLOG}.tistory.com/{post_id.group(1)}"
-        print(f"🎉 발행 완료 (ID 추출): {final_url}")
-        notify_discord(
-            f"✅ **티스토리 자동 포스팅 완료!**\n"
-            f"📌 제목: {title}\n"
-            f"🔗 URL: {final_url}"
-        )
-        return final_url
+    form_data = {
+        "title":         (None, title),
+        "content":       (None, content_html),
+        "visibility":    (None, "20"),
+        "categoryId":    (None, category_id),
+        "tag":           (None, ",".join(tags[:10])),
+        "acceptComment": (None, "1"),
+        "postType":      (None, "NORMAL"),
+    }
+    if csrf:
+        form_data["_csrf"] = (None, csrf)
 
-    # 응답 본문에서 포스트 ID 추출
-    id_in_body = re.search(
-        rf'https://{TISTORY_BLOG}\.tistory\.com/(\d+)', resp2.text
+    for endpoint in [
+        f"https://{TISTORY_BLOG}.tistory.com/manage/api/post",
+        f"https://{TISTORY_BLOG}.tistory.com/manage/post/write",
+    ]:
+        try:
+            r = session.post(endpoint, files=form_data, timeout=20)
+            print(f"  {endpoint.split('/manage/')[1]}: {r.status_code} | {r.url[:60]}")
+            if r.status_code in [200, 201, 302]:
+                # URL에서 포스트 ID 추출
+                post_id_m = re.search(rf"/{TISTORY_BLOG}\.tistory\.com/(\d+)", r.url)
+                if not post_id_m:
+                    post_id_m = re.search(r'/(\d+)(?:\?|$)', r.url)
+                if post_id_m:
+                    url = f"https://{TISTORY_BLOG}.tistory.com/{post_id_m.group(1)}"
+                    print(f"🎉 발행 완료 (form): {url}")
+                    notify_discord(f"✅ **티스토리 포스팅 완료!**\n📌 {title}\n🔗 {url}")
+                    return url
+                # 응답 본문에서 ID 추출
+                id_m = re.search(r'"(?:postId|id)"\s*:\s*(\d+)', r.text)
+                if id_m:
+                    url = f"https://{TISTORY_BLOG}.tistory.com/{id_m.group(1)}"
+                    print(f"🎉 발행 완료 (본문): {url}")
+                    notify_discord(f"✅ **티스토리 포스팅 완료!**\n📌 {title}\n🔗 {url}")
+                    return url
+        except Exception as e:
+            print(f"  오류: {e}")
+
+    # ── Step 5: 디버깅 정보 수집 ─────────────────────────────
+    print("\n🔍 네트워크 엔드포인트 탐색...")
+    debug_resp = session.get(
+        f"https://{TISTORY_BLOG}.tistory.com/manage/newpost/",
+        timeout=15
     )
-    if id_in_body:
-        final_url = f"https://{TISTORY_BLOG}.tistory.com/{id_in_body.group(1)}"
-        print(f"🎉 발행 완료 (본문 추출): {final_url}")
-        notify_discord(
-            f"✅ **티스토리 자동 포스팅 완료!**\n"
-            f"📌 제목: {title}\n"
-            f"🔗 URL: {final_url}"
-        )
-        return final_url
+    # JS 번들에서 API 엔드포인트 힌트 추출
+    api_hints = re.findall(r'["\']/(manage/[^"\']+/(?:write|post|save|create)[^"\']*)["\']', debug_resp.text)
+    print(f"  발견된 API 힌트: {api_hints[:10]}")
 
-    # 실패 — 디버깅 정보 출력
-    print(f"\n❌ 발행 실패")
-    print(f"  응답 URL: {resp2.url}")
-    print(f"  응답 앞부분:\n{resp2.text[:500]}")
-    raise Exception(f"포스팅 실패: STATUS={resp2.status_code}, URL={resp2.url}")
+    raise Exception(
+        "모든 API 방식 실패.\n"
+        "브라우저 개발자도구 → Network 탭 → 글 저장 시 호출되는 API URL을 확인해주세요."
+    )
 
 
 if __name__ == "__main__":
