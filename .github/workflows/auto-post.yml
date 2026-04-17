@@ -4,21 +4,34 @@ on:
   workflow_dispatch:
     inputs:
       topic:
-        description: "포스팅 주제"
-        required: true
+        description: "📝 블로그 주제 (일반 포스팅)"
+        required: false
         type: string
+      coupang_url:
+        description: "🛍️ 쿠팡파트너스 링크 (상품 포스팅)"
+        required: false
+        type: string
+      post_type:
+        description: "🛍️ 상품 글 유형 (review/viral/sales)"
+        required: false
+        default: "review"
+        type: choice
+        options: ["review", "viral", "sales"]
   schedule:
     - cron: "0 0 * * 1,3,5"
 
 env:
-  ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
-  TISTORY_BLOG:       ${{ secrets.TISTORY_BLOG }}
-  NOTION_TOKEN:       ${{ secrets.NOTION_TOKEN }}
-  NOTION_PAGE_ID:     ${{ secrets.NOTION_PAGE_ID }}
-  DISCORD_WEBHOOK:    ${{ secrets.DISCORD_WEBHOOK }}
-  HOME_SERVER_URL:    ${{ secrets.HOME_SERVER_URL }}
-  WEBHOOK_SECRET:     ${{ secrets.WEBHOOK_SECRET }}
-  POST_TOPIC:         ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
+  ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+  TISTORY_BLOG:        ${{ secrets.TISTORY_BLOG }}
+  NOTION_TOKEN:        ${{ secrets.NOTION_TOKEN }}
+  NOTION_PAGE_ID:      ${{ secrets.NOTION_PAGE_ID }}
+  DISCORD_WEBHOOK:     ${{ secrets.DISCORD_WEBHOOK }}
+  HOME_SERVER_URL:     ${{ secrets.HOME_SERVER_URL }}
+  WEBHOOK_SECRET:      ${{ secrets.WEBHOOK_SECRET }}
+  UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+  POST_TOPIC:          ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
+  COUPANG_URL:         ${{ github.event.inputs.coupang_url || '' }}
+  POST_TYPE:           ${{ github.event.inputs.post_type || 'review' }}
 
 jobs:
   auto-post:
