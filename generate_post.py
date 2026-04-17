@@ -19,6 +19,10 @@ UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "")
 TOPIC               = os.getenv("POST_TOPIC", "")
 COUPANG_URL         = os.getenv("COUPANG_URL", "")
 POST_TYPE           = os.getenv("POST_TYPE", "review")
+# 수동 입력 상품 정보 (쿠팡 파싱 실패 대비)
+PRODUCT_NAME        = os.getenv("PRODUCT_NAME", "")
+PRODUCT_PRICE       = os.getenv("PRODUCT_PRICE", "")
+PRODUCT_FEATURES    = os.getenv("PRODUCT_FEATURES", "")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -239,6 +243,17 @@ def generate_product_post(coupang_url: str, post_type: str = "review") -> dict:
     print(f"🛍️ 쿠팡 상품 분석: {coupang_url[:60]}")
 
     product = fetch_product_info(coupang_url)
+
+    # 수동 입력 정보로 보완 (파싱 실패 시)
+    if PRODUCT_NAME and not product.get("title"):
+        product["title"] = PRODUCT_NAME
+        print(f"  📦 수동 상품명 사용: {PRODUCT_NAME}")
+    if PRODUCT_PRICE and not product.get("price"):
+        product["price"] = PRODUCT_PRICE
+        print(f"  💰 수동 가격 사용: {PRODUCT_PRICE}")
+    if PRODUCT_FEATURES:
+        product["description"] = (product.get("description","") + "\n특징: " + PRODUCT_FEATURES).strip()
+        print(f"  ✨ 상품 특징 추가: {PRODUCT_FEATURES[:50]}")
 
     user_message = f"""
 다음 쿠팡 상품으로 블로그 포스트를 작성해주세요:

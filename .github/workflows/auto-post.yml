@@ -8,11 +8,23 @@ on:
         required: false
         type: string
       coupang_url:
-        description: "🛍️ 쿠팡파트너스 링크 (상품 포스팅)"
+        description: "🛍️ 쿠팡파트너스 링크"
+        required: false
+        type: string
+      product_name:
+        description: "📦 상품명 (쿠팡 포스팅 시 직접 입력)"
+        required: false
+        type: string
+      product_price:
+        description: "💰 가격 (예: 29,900원)"
+        required: false
+        type: string
+      product_features:
+        description: "✨ 상품 특징/장점 (쉼표로 구분)"
         required: false
         type: string
       post_type:
-        description: "🛍️ 상품 글 유형 (review/viral/sales)"
+        description: "📋 글 유형"
         required: false
         default: "review"
         type: choice
@@ -31,6 +43,9 @@ env:
   UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
   POST_TOPIC:          ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
   COUPANG_URL:         ${{ github.event.inputs.coupang_url || '' }}
+  PRODUCT_NAME:        ${{ github.event.inputs.product_name || '' }}
+  PRODUCT_PRICE:       ${{ github.event.inputs.product_price || '' }}
+  PRODUCT_FEATURES:    ${{ github.event.inputs.product_features || '' }}
   POST_TYPE:           ${{ github.event.inputs.post_type || 'review' }}
 
 jobs:
