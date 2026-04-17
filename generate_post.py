@@ -74,9 +74,11 @@ PRODUCT_SYSTEM_PROMPT = """
 }
 
 ## 중요 규칙
-- 본문 내 자연스럽게 쿠팡 구매 링크 삽입
+- 본문 내 자연스럽게 쿠팡 구매 링크 2~3회 삽입
 - 클릭을 유도하는 CTA 문구 포함
 - 광고 느낌 최소화, 실제 사용자 후기처럼 작성
+- 본문 **맨 마지막**에 반드시 아래 문구를 추가:
+  > 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
 """
 
 
@@ -218,6 +220,16 @@ def generate_product_post(coupang_url: str, post_type: str = "review") -> dict:
     post_data["category_key"] = "product"
     post_data["notion_tag"] = CATEGORY_MAP["product"]["notion_tag"]
     post_data["tistory_category_id"] = CATEGORY_MAP["product"]["tistory_id"]
+
+    # 쿠팡파트너스 필수 고지 문구 강제 삽입 (맨 마지막)
+    COUPANG_DISCLAIMER = (
+        "\n\n---\n"
+        "> 이 포스팅은 쿠팡 파트너스 활동의 일환으로, "
+        "이에 따른 일정액의 수수료를 제공받습니다."
+    )
+    content_md = post_data.get("content_md", "")
+    if "쿠팡 파트너스 활동의 일환" not in content_md:
+        post_data["content_md"] = content_md + COUPANG_DISCLAIMER
 
     # 대표 이미지 (상품 이미지 우선)
     image_url = get_representative_image(
