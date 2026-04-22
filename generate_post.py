@@ -1,9 +1,7 @@
 """
-generate_post.py - v3
-- 쿠팡 리다이렉트 → 실제 상품 페이지 파싱
-- 상품 이미지 직접 추출
-- Unsplash source.unsplash.com 제거 → API 직접 사용
-- 실제 상품명/가격 기반 구체적 글쓰기
+generate_post.py - v4 (Google Gemini API - 무료)
+- Anthropic Claude API → Google Gemini 1.5 Flash (무료)
+- Unsplash source.unsplash.com 제거 → Unsplash API 또는 Pexels API
 """
 
 import os
@@ -11,20 +9,21 @@ import re
 import json
 import sys
 import requests
-import anthropic
 from datetime import datetime
 
-ANTHROPIC_API_KEY   = os.environ["ANTHROPIC_API_KEY"]
+# ── Gemini API (무료) ─────────────────────────────────────
+GEMINI_API_KEY      = os.environ["GEMINI_API_KEY"]
+GEMINI_MODEL        = "gemini-1.5-flash"
+GEMINI_API_URL      = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+
 UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "")
+PEXELS_API_KEY      = os.getenv("PEXELS_API_KEY", "")
 TOPIC               = os.getenv("POST_TOPIC", "")
 COUPANG_URL         = os.getenv("COUPANG_URL", "")
 POST_TYPE           = os.getenv("POST_TYPE", "review")
-# 수동 입력 상품 정보 (쿠팡 파싱 실패 대비)
 PRODUCT_NAME        = os.getenv("PRODUCT_NAME", "")
 PRODUCT_PRICE       = os.getenv("PRODUCT_PRICE", "")
 PRODUCT_FEATURES    = os.getenv("PRODUCT_FEATURES", "")
-
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 CATEGORY_MAP = {
     "python":    {"notion_tag": "🐍 Python/개발",    "tistory_id": "0"},
@@ -45,7 +44,7 @@ BLOG_SYSTEM_PROMPT = """
 
 카테고리 키: python, langchain, discord, infra, quant, linux, docker, fastapi, vue, product, general
 
-출력 형식 (순수 JSON):
+반드시 아래 형식의 순수 JSON만 출력하세요. 마크다운 코드블록(```) 없이:
 {
   "category_key": "카테고리 키",
   "thumbnail_title": "썸네일 제목 (35자 내외)",
@@ -64,8 +63,8 @@ PRODUCT_SYSTEM_PROMPT = """
 
 글 유형:
 - review: 실사용자 후기 (구체적 장단점, 별점, 총평) - 추상적 표현 금지
-- viral: 바이럴 마케팅 (감성 스토리, 상품 자연스럽게 녹이기)
-- sales: 판매 최적화 (혜택 강조, CTA, 가격 비교)
+- viral: 바이럴 마케팅 (감성 스토리)
+- sales: 판매 최적화 (혜택 강조, CTA)
 
 중요 규칙:
 1. 실제 상품명을 제목과 본문에 반드시 명시
@@ -75,18 +74,68 @@ PRODUCT_SYSTEM_PROMPT = """
 5. 본문 맨 마지막에 반드시:
    > 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
 
-출력 형식 (순수 JSON):
+반드시 아래 형식의 순수 JSON만 출력하세요. 마크다운 코드블록(```) 없이:
 {
   "category_key": "product",
   "thumbnail_title": "썸네일 제목 (상품명 포함, 35자 내외)",
   "image_keyword": "상품 관련 영어 키워드 2~3단어",
-  "title": "포스트 제목 (실제 상품명 포함, SEO 최적화)",
+  "title": "포스트 제목 (실제 상품명 포함)",
   "content_md": "마크다운 본문 전체",
   "tags": ["태그1", "태그2"],
   "post_type": "review|viral|sales",
   "meta_description": "메타 설명 (실제 상품명 포함, 80자 내외)"
 }
 """
+
+
+def call_gemini(system_prompt: str, user_message: str) -> dict:
+    """Google Gemini API 호출 (무료)"""
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": GEMINI_API_KEY,
+    }
+
+    # Gemini는 system/user를 contents로 통합
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": f"{system_prompt}\n\n{user_message}"}],
+                "role": "user"
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 8192,
+            "responseMimeType": "application/json",  # JSON 모드 강제
+        }
+    }
+
+    for attempt in range(3):
+        try:
+            resp = requests.post(GEMINI_API_URL, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+
+            # 응답 추출
+            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+            # 혹시 코드블록으로 감싸진 경우 제거
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+
+            result = json.loads(raw)
+            print(f"  ✅ Gemini API 호출 성공 (attempt {attempt+1})")
+            return result
+
+        except Exception as e:
+            print(f"  ⚠️ Gemini 오류 (attempt {attempt+1}): {e}")
+            if attempt == 2:
+                raise RuntimeError(f"Gemini API 호출 실패: {e}")
+
+    raise RuntimeError("Gemini API 모든 시도 실패")
 
 
 def fetch_product_info(url: str) -> dict:
@@ -99,39 +148,21 @@ def fetch_product_info(url: str) -> dict:
         ),
         "Accept-Language": "ko-KR,ko;q=0.9",
     }
-
     try:
-        # 리다이렉트 따라가기
         session = requests.Session()
-        resp = session.get(url, headers=headers, timeout=15,
-                          allow_redirects=True, stream=False)
-        final_url = resp.url
+        resp = session.get(url, headers=headers, timeout=15, allow_redirects=True)
         html = resp.text
-        print(f"  🔗 최종 URL: {final_url[:80]}")
+        print(f"  🔗 최종 URL: {resp.url[:80]}")
 
-        # OG 태그 파싱
         og_title = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html)
         og_image = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html)
         og_desc  = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']', html)
 
-        # 제목 파싱 (여러 방법 시도)
-        title = ""
-        if og_title:
-            title = og_title.group(1).strip()
-        if not title:
-            t = re.search(r'<title>([^<]+)</title>', html)
-            title = t.group(1).strip() if t else ""
-        # 쿠팡 제목에서 " - 쿠팡!" 제거
+        title = (og_title.group(1) if og_title else "")
         title = re.sub(r'\s*[-|]\s*쿠팡.*$', '', title).strip()
 
-        # 가격 파싱
         price = ""
-        price_patterns = [
-            r'"finalPrice"\s*:\s*(\d+)',
-            r'class="[^"]*total-price[^"]*"[^>]*>.*?(\d{1,3}(?:,\d{3})+)',
-            r'(\d{1,3}(?:,\d{3})+)\s*원',
-        ]
-        for pat in price_patterns:
+        for pat in [r'"finalPrice"\s*:\s*(\d+)', r'(\d{1,3}(?:,\d{3})+)\s*원']:
             m = re.search(pat, html, re.DOTALL)
             if m:
                 price_num = m.group(1).replace(',', '')
@@ -139,76 +170,61 @@ def fetch_product_info(url: str) -> dict:
                     price = f"{int(price_num):,}원"
                     break
 
-        # 상품 이미지 (OG 이미지 우선)
-        image_url = og_image.group(1) if og_image else ""
-        # 쿠팡 상품 썸네일 직접 추출
-        if not image_url:
-            img_m = re.search(r'src=["\']([^"\']*thumbnail[^"\']*\.jpg[^"\']*)["\']', html)
-            if img_m:
-                image_url = img_m.group(1)
-
-        # 상품 설명
-        description = og_desc.group(1) if og_desc else ""
-
         result = {
-            "url":         url,
-            "final_url":   final_url,
-            "title":       title[:200],
-            "price":       price or "가격 확인 필요",
-            "image_url":   image_url,
-            "description": description[:300],
+            "url": url, "final_url": resp.url,
+            "title": title[:200], "price": price or "",
+            "image_url": og_image.group(1) if og_image else "",
+            "description": og_desc.group(1) if og_desc else "",
         }
-        print(f"  📦 상품명: {result['title'][:60]}")
-        print(f"  💰 가격: {result['price']}")
-        print(f"  🖼️ 이미지: {'있음' if image_url else '없음'}")
+        print(f"  📦 상품명: {result['title'][:60] or '파싱 실패'}")
+        print(f"  💰 가격: {result['price'] or '파싱 실패'}")
         return result
-
     except Exception as e:
         print(f"  ⚠️ 상품 파싱 실패: {e}")
         return {"url": url, "final_url": url, "title": "", "price": "", "image_url": "", "description": ""}
 
 
-def get_unsplash_image(keyword: str) -> str:
-    """Unsplash API로 이미지 URL 가져오기"""
-    if not UNSPLASH_ACCESS_KEY or not keyword:
-        return ""
-    try:
-        resp = requests.get(
-            "https://api.unsplash.com/search/photos",
-            params={"query": keyword, "per_page": 1, "orientation": "landscape"},
-            headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
-            timeout=10
-        )
-        data = resp.json()
-        if data.get("results"):
-            url = data["results"][0]["urls"]["regular"]
-            print(f"  🖼️ Unsplash: {url[:60]}")
-            return url
-    except Exception as e:
-        print(f"  ⚠️ Unsplash 실패: {e}")
-    return ""
+def get_image(keyword: str, fallback_url: str = "") -> str:
+    """이미지 URL 가져오기: 쿠팡 이미지 → Pexels → Unsplash"""
+    if fallback_url:
+        return fallback_url
 
-
-def _call_api(system: str, user_message: str) -> dict:
-    for tokens in [8000, 6000, 4000]:
+    # Pexels API (무료, 월 25,000회)
+    if PEXELS_API_KEY and keyword:
         try:
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=tokens,
-                system=system,
-                messages=[{"role": "user", "content": user_message}]
+            resp = requests.get(
+                "https://api.pexels.com/v1/search",
+                params={"query": keyword, "per_page": 1, "orientation": "landscape"},
+                headers={"Authorization": PEXELS_API_KEY},
+                timeout=10
             )
-            if response.stop_reason == "max_tokens":
-                continue
-            raw = response.content[0].text.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            return json.loads(raw.strip())
+            data = resp.json()
+            if data.get("photos"):
+                url = data["photos"][0]["src"]["large"]
+                print(f"  🖼️ Pexels: {url[:60]}")
+                return url
         except Exception as e:
-            print(f"  ⚠️ API 오류 (tokens={tokens}): {e}")
-    raise RuntimeError("API 호출 실패")
+            print(f"  ⚠️ Pexels 실패: {e}")
+
+    # Unsplash API
+    if UNSPLASH_ACCESS_KEY and keyword:
+        try:
+            resp = requests.get(
+                "https://api.unsplash.com/search/photos",
+                params={"query": keyword, "per_page": 1, "orientation": "landscape"},
+                headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
+                timeout=10
+            )
+            data = resp.json()
+            if data.get("results"):
+                url = data["results"][0]["urls"]["regular"]
+                print(f"  🖼️ Unsplash: {url[:60]}")
+                return url
+        except Exception as e:
+            print(f"  ⚠️ Unsplash 실패: {e}")
+
+    print("  ⚠️ 이미지 없음 (API 키 미설정)")
+    return ""
 
 
 def markdown_to_html(md: str) -> str:
@@ -227,7 +243,6 @@ def markdown_to_html(md: str) -> str:
 
 
 def build_html_with_image(content_md: str, image_url: str, alt: str = "") -> str:
-    """본문 HTML 생성 (대표 이미지 최상단 삽입)"""
     img_tag = ""
     if image_url:
         img_tag = (
@@ -239,80 +254,60 @@ def build_html_with_image(content_md: str, image_url: str, alt: str = "") -> str
 
 
 def generate_product_post(coupang_url: str, post_type: str = "review") -> dict:
-    """쿠팡파트너스 링크 → 상품 분석 → 포스팅 생성"""
     print(f"🛍️ 쿠팡 상품 분석: {coupang_url[:60]}")
-
     product = fetch_product_info(coupang_url)
 
-    # 수동 입력 정보로 보완 (파싱 실패 시)
+    # 수동 입력으로 보완
     if PRODUCT_NAME and not product.get("title"):
         product["title"] = PRODUCT_NAME
-        print(f"  📦 수동 상품명 사용: {PRODUCT_NAME}")
     if PRODUCT_PRICE and not product.get("price"):
         product["price"] = PRODUCT_PRICE
-        print(f"  💰 수동 가격 사용: {PRODUCT_PRICE}")
     if PRODUCT_FEATURES:
         product["description"] = (product.get("description","") + "\n특징: " + PRODUCT_FEATURES).strip()
-        print(f"  ✨ 상품 특징 추가: {PRODUCT_FEATURES[:50]}")
 
     user_message = f"""
 다음 쿠팡 상품으로 블로그 포스트를 작성해주세요:
 
-**상품명**: {product['title'] or '(파싱 실패 - 링크 참고)'}
-**가격**: {product['price']}
-**상품 설명**: {product['description']}
-**구매 링크**: {coupang_url}
-**글 유형**: {post_type}
+상품명: {product['title'] or '(파싱 실패 - 링크에서 확인)'}
+가격: {product['price'] or '(확인 필요)'}
+상품 설명: {product['description'][:300]}
+구매 링크: {coupang_url}
+글 유형: {post_type}
 
-{'상품명을 모르는 경우 링크 클릭을 유도하는 방식으로 작성하세요.' if not product['title'] else '실제 상품명을 제목과 본문에 명시하세요.'}
-구매 링크({coupang_url})를 본문에 자연스럽게 2~3회 삽입하세요.
+실제 상품명을 제목에 포함하고, 구매 링크({coupang_url})를 본문에 2~3회 삽입하세요.
 순수 JSON만 출력하세요.
 """
-    post_data = _call_api(PRODUCT_SYSTEM_PROMPT, user_message)
-
-    # 카테고리
+    post_data = call_gemini(PRODUCT_SYSTEM_PROMPT, user_message)
     post_data["category_key"]        = "product"
     post_data["notion_tag"]          = CATEGORY_MAP["product"]["notion_tag"]
     post_data["tistory_category_id"] = CATEGORY_MAP["product"]["tistory_id"]
 
-    # 쿠팡 필수 고지 문구 강제 삽입
+    # 쿠팡 파트너스 고지 강제 삽입
     content_md = post_data.get("content_md", "")
     if "쿠팡 파트너스 활동의 일환" not in content_md:
-        content_md += (
-            "\n\n---\n"
-            "> 이 포스팅은 쿠팡 파트너스 활동의 일환으로, "
-            "이에 따른 일정액의 수수료를 제공받습니다."
-        )
+        content_md += "\n\n---\n> 이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
         post_data["content_md"] = content_md
 
-    # 대표 이미지: 쿠팡 상품 이미지 우선 → Unsplash
-    image_url = product.get("image_url", "")
-    if not image_url:
-        image_url = get_unsplash_image(post_data.get("image_keyword", "product shopping"))
+    image_url = get_image(post_data.get("image_keyword","product shopping"), product.get("image_url",""))
     post_data["representative_image_url"] = image_url
-
-    # HTML 생성
-    post_data["content_html"] = build_html_with_image(
-        content_md, image_url, post_data.get("thumbnail_title", "")
-    )
+    post_data["content_html"] = build_html_with_image(content_md, image_url, post_data.get("thumbnail_title",""))
 
     print(f"✅ 상품 포스팅 완료: {post_data['title'][:50]}")
     return post_data
 
 
 def generate_post(topic: str) -> dict:
-    """일반 주제 포스팅"""
-    print(f"🤖 포스트 생성: '{topic}'")
+    print(f"🤖 Gemini로 포스트 생성: '{topic}'")
 
     user_message = f"""
 다음 주제로 티스토리 블로그 포스트를 작성해주세요:
-**주제**: {topic}
+주제: {topic}
+
 category_key, image_keyword, post_type 자동 결정.
 content_html 제외. 순수 JSON만 출력.
 """
-    post_data = _call_api(BLOG_SYSTEM_PROMPT, user_message)
+    post_data = call_gemini(BLOG_SYSTEM_PROMPT, user_message)
 
-    # 카테고리
     key = post_data.get("category_key", "general")
     if key not in CATEGORY_MAP:
         key = "general"
@@ -320,15 +315,10 @@ content_html 제외. 순수 JSON만 출력.
     post_data["notion_tag"]          = CATEGORY_MAP[key]["notion_tag"]
     post_data["tistory_category_id"] = CATEGORY_MAP[key]["tistory_id"]
 
-    # 대표 이미지
-    image_url = get_unsplash_image(post_data.get("image_keyword", "technology laptop"))
+    image_url = get_image(post_data.get("image_keyword", "technology laptop"))
     post_data["representative_image_url"] = image_url
-
-    # HTML 생성
     post_data["content_html"] = build_html_with_image(
-        post_data.get("content_md", ""),
-        image_url,
-        post_data.get("thumbnail_title", "")
+        post_data.get("content_md",""), image_url, post_data.get("thumbnail_title","")
     )
 
     print(f"✅ 포스팅 완료: {post_data['title'][:50]}")
