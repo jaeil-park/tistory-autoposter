@@ -14,7 +14,7 @@ from datetime import datetime
 
 # ── AI API 설정 ───────────────────────────────────────────
 GEMINI_API_KEY      = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL        = "gemini-1.5-flash"
+GEMINI_MODEL        = "gemini-2.0-flash"
 GEMINI_API_URL      = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 NAVER_CLIENT_ID     = os.getenv("NAVER_CLIENT_ID", "")
