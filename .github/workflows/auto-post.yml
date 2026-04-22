@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       topic:
-        description: "📝 블로그 주제 (일반 포스팅)"
+        description: "📝 블로그 주제 (IT 기술)"
         required: false
         type: string
       coupang_url:
@@ -12,7 +12,7 @@ on:
         required: false
         type: string
       product_name:
-        description: "📦 상품명 (쿠팡 포스팅 시 직접 입력)"
+        description: "📦 상품명 (직접 입력)"
         required: false
         type: string
       product_price:
@@ -20,7 +20,7 @@ on:
         required: false
         type: string
       product_features:
-        description: "✨ 상품 특징/장점 (쉼표로 구분)"
+        description: "✨ 상품 특징 (쉼표 구분)"
         required: false
         type: string
       post_type:
@@ -33,15 +33,21 @@ on:
     - cron: "0 0 * * 1,3,5"
 
 env:
-  GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+  # AI API
+  GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+  NAVER_CLIENT_ID:     ${{ secrets.NAVER_CLIENT_ID }}
+  NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+  # 이미지/영상
+  PEXELS_API_KEY:      ${{ secrets.PEXELS_API_KEY }}
+  UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+  # 발행
   TISTORY_BLOG:        ${{ secrets.TISTORY_BLOG }}
   NOTION_TOKEN:        ${{ secrets.NOTION_TOKEN }}
   NOTION_PAGE_ID:      ${{ secrets.NOTION_PAGE_ID }}
   DISCORD_WEBHOOK:     ${{ secrets.DISCORD_WEBHOOK }}
   HOME_SERVER_URL:     ${{ secrets.HOME_SERVER_URL }}
   WEBHOOK_SECRET:      ${{ secrets.WEBHOOK_SECRET }}
-  UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
-  PEXELS_API_KEY:      ${{ secrets.PEXELS_API_KEY }}
+  # 입력값
   POST_TOPIC:          ${{ github.event.inputs.topic || vars.DEFAULT_TOPIC }}
   COUPANG_URL:         ${{ github.event.inputs.coupang_url || '' }}
   PRODUCT_NAME:        ${{ github.event.inputs.product_name || '' }}
