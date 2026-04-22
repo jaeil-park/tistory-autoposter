@@ -112,23 +112,23 @@ def call_gemini(system_prompt: str, user_message: str) -> dict:
         "gemini-1.5-flash-latest",
     ]
 
-    headers = {"Content-Type": "application/json", "X-goog-api-key": GEMINI_API_KEY}
+    headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_message}"}], "role": "user"}],
         "generationConfig": {
             "temperature": 0.7,
             "maxOutputTokens": 8192,
-            "responseMimeType": "application/json",
         }
     }
 
     for model in models:
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        # API 키를 쿼리 파라미터로 전달 (헤더 방식보다 안정적)
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
         print(f"  🤖 모델 시도: {model}")
 
         for attempt in range(3):
             try:
-                resp = requests.post(api_url, headers=headers, json=payload, timeout=60)
+                resp = requests.post(api_url, json=payload, timeout=60)
 
                 # 429 → 대기 후 재시도
                 if resp.status_code == 429:
