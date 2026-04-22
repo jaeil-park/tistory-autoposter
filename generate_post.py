@@ -107,9 +107,9 @@ def call_gemini(system_prompt: str, user_message: str) -> dict:
 
     # 모델 우선순위: 빠른 것 → 안정적인 것
     models = [
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-latest",
     ]
 
     headers = {"Content-Type": "application/json"}
