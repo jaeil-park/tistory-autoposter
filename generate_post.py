@@ -102,11 +102,17 @@ PRODUCT_SYSTEM_PROMPT = """
 # ══════════════════════════════════════════════════════
 
 def call_gemini(system_prompt: str, user_message: str) -> dict:
-    """Google Gemini 1.5 Flash (무료) - IT 기술 포스팅"""
-    headers = {
-        "Content-Type": "application/json",
-        "X-goog-api-key": GEMINI_API_KEY,
-    }
+    """Google Gemini API - 429 자동 재시도 + 모델 fallback"""
+    import time
+
+    # 모델 우선순위: 빠른 것 → 안정적인 것
+    models = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash-latest",
+    ]
+
+    headers = {"Content-Type": "application/json", "X-goog-api-key": GEMINI_API_KEY}
     payload = {
         "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_message}"}], "role": "user"}],
         "generationConfig": {
@@ -115,22 +121,45 @@ def call_gemini(system_prompt: str, user_message: str) -> dict:
             "responseMimeType": "application/json",
         }
     }
-    for attempt in range(3):
-        try:
-            resp = requests.post(GEMINI_API_URL, headers=headers, json=payload, timeout=60)
-            resp.raise_for_status()
-            raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            result = json.loads(raw.strip())
-            print(f"  ✅ Gemini 응답 완료 (attempt {attempt+1})")
-            return result
-        except Exception as e:
-            print(f"  ⚠️ Gemini 오류 (attempt {attempt+1}): {e}")
-            if attempt == 2:
-                raise RuntimeError(f"Gemini API 실패: {e}")
+
+    for model in models:
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        print(f"  🤖 모델 시도: {model}")
+
+        for attempt in range(3):
+            try:
+                resp = requests.post(api_url, headers=headers, json=payload, timeout=60)
+
+                # 429 → 대기 후 재시도
+                if resp.status_code == 429:
+                    wait = (attempt + 1) * 10  # 10초, 20초, 30초
+                    print(f"  ⏳ Rate limit → {wait}초 대기 후 재시도...")
+                    time.sleep(wait)
+                    continue
+
+                resp.raise_for_status()
+                raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                result = json.loads(raw.strip())
+                print(f"  ✅ Gemini 완료: {model} (attempt {attempt+1})")
+                return result
+
+            except requests.exceptions.HTTPError as e:
+                if resp.status_code == 404:
+                    print(f"  ⚠️ 모델 없음: {model} → 다음 모델 시도")
+                    break  # 다음 모델로
+                print(f"  ⚠️ HTTP 오류 (attempt {attempt+1}): {e}")
+                if attempt == 2:
+                    break  # 다음 모델로
+            except Exception as e:
+                print(f"  ⚠️ 오류 (attempt {attempt+1}): {e}")
+                if attempt == 2:
+                    break
+
+    raise RuntimeError("모든 Gemini 모델 시도 실패")
 
 
 def call_naver_clova(prompt: str) -> str:
