@@ -140,24 +140,6 @@ def save_to_notion(title, content_md, content_html, tags,
             }
         })
 
-    # HTML 코드블록
-    blocks.append({"object": "block", "type": "divider", "divider": {}})
-    blocks.append({
-        "object": "block", "type": "heading_3",
-        "heading_3": {"rich_text": [{"type": "text", "text": {
-            "content": "📋 티스토리 HTML (복사 후 HTML 모드에 붙여넣기)"
-        }}]}
-    })
-    html_clean = content_html.replace("\n", " ")
-    for i in range(0, min(len(html_clean), 1900 * 20), 1900):
-        blocks.append({
-            "object": "block", "type": "code",
-            "code": {
-                "rich_text": [{"type": "text", "text": {"content": html_clean[i:i+1900]}}],
-                "language": "html"
-            }
-        })
-
     blocks.append({"object": "block", "type": "divider", "divider": {}})
 
     # 본문 마크다운

@@ -247,8 +247,9 @@ def get_pexels_image(keyword: str) -> str:
         )
         data = resp.json()
         if data.get("photos"):
-            url = data["photos"][0]["src"]["large"]
-            print(f"  🖼️ Pexels 이미지: {url[:60]}")
+            photo = data["photos"][0]["src"]
+            url = photo.get("large2x") or photo.get("large") or photo.get("medium", "")
+            print(f"  🖼️ Pexels 이미지: {url}")
             return url
     except Exception as e:
         print(f"  ⚠️ Pexels 이미지 실패: {e}")
@@ -275,14 +276,14 @@ def get_pexels_video(keyword: str) -> dict:
             hd_file = next((f for f in files if f.get("width", 0) <= 1280), files[0] if files else None)
             if hd_file:
                 result = {
-                    "url":       hd_file.get("link", ""),
+                    "url":        hd_file.get("link", ""),
                     "thumbnail": video.get("image", ""),
                     "width":     hd_file.get("width", 0),
                     "height":    hd_file.get("height", 0),
                     "duration":  video.get("duration", 0),
                     "pexels_url": video.get("url", ""),
                 }
-                print(f"  🎬 Pexels 영상: {result['url'][:60]}")
+                print(f"  🎬 Pexels 영상: {result['url']}")
                 return result
     except Exception as e:
         print(f"  ⚠️ Pexels 영상 실패: {e}")
