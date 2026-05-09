@@ -33,6 +33,7 @@ PRODUCT_PRICE    = os.getenv("PRODUCT_PRICE", "")
 PRODUCT_FEATURES = os.getenv("PRODUCT_FEATURES", "")
 
 CATEGORY_MAP = {
+    # IT/개발
     "python":    {"notion_tag": "🐍 Python/개발",    "tistory_id": "0"},
     "langchain": {"notion_tag": "🤖 AI/LangChain",   "tistory_id": "0"},
     "discord":   {"notion_tag": "💬 Discord봇",      "tistory_id": "0"},
@@ -42,14 +43,39 @@ CATEGORY_MAP = {
     "docker":    {"notion_tag": "🐳 Docker/DevOps",  "tistory_id": "0"},
     "fastapi":   {"notion_tag": "⚡ FastAPI/백엔드", "tistory_id": "0"},
     "vue":       {"notion_tag": "🎨 Frontend",       "tistory_id": "0"},
+    # 라이프/여행
+    "travel":    {"notion_tag": "✈️ 여행/국내외",    "tistory_id": "0"},
+    "food":      {"notion_tag": "🍽️ 맛집/음식",     "tistory_id": "0"},
+    "health":    {"notion_tag": "💪 건강/운동",      "tistory_id": "0"},
+    "life":      {"notion_tag": "🌿 라이프/일상",    "tistory_id": "0"},
+    # 정보/지식
+    "info":      {"notion_tag": "📢 정보공유",       "tistory_id": "0"},
+    "study":     {"notion_tag": "📚 공부/자기계발",  "tistory_id": "0"},
+    "finance":   {"notion_tag": "💰 재테크/경제",    "tistory_id": "0"},
+    "news":      {"notion_tag": "📰 뉴스/이슈",      "tistory_id": "0"},
+    # 상품/쇼핑
     "product":   {"notion_tag": "🛍️ 상품리뷰",      "tistory_id": "0"},
+    # 기타
     "general":   {"notion_tag": "📝 일반",           "tistory_id": "0"},
 }
 
 BLOG_SYSTEM_PROMPT = """
 당신은 베테랑 IT 엔지니어 재일(jaeil.park)의 티스토리 블로그 포스트 작성 전문가입니다.
 
-카테고리 키: python, langchain, discord, infra, quant, linux, docker, fastapi, vue, product, general
+카테고리 키: python, langchain, discord, infra, quant, linux, docker, fastapi, vue, travel, food, health, life, info, study, finance, news, product, general
+
+글 유형 가이드:
+- tutorial: 단계별 설치/구축 방법
+- troubleshooting: 에러/장애 해결
+- devlog: 개발 구현기/프로젝트 로그
+- concept: 개념 정리/비교/리뷰
+- snippet: 코드/명령어 스니펫 공유
+- info: 유용한 정보/팁 공유
+- study: 학습 내용 정리/자기계발
+- news: 뉴스/이슈/트렌드 정리
+- review: 상품/서비스/장소 리뷰
+- viral: 감성/바이럴 스토리텔링
+- sales: 판매/구매 유도 글
 
 반드시 아래 형식의 순수 JSON만 출력 (마크다운 코드블록 없이):
 {
@@ -60,7 +86,7 @@ BLOG_SYSTEM_PROMPT = """
   "title": "포스트 제목",
   "content_md": "마크다운 본문",
   "tags": ["태그1", "태그2"],
-  "post_type": "tutorial|troubleshooting|devlog|concept|snippet|review|viral",
+  "post_type": "tutorial|troubleshooting|devlog|concept|snippet|review|viral|sales|info|study|news",
   "meta_description": "메타 설명 (80자 내외)"
 }
 """
@@ -458,9 +484,17 @@ def generate_product_post(coupang_url: str, post_type: str = "review") -> dict:
 def generate_post(topic: str) -> dict:
     print(f"🤖 Gemini로 IT 포스팅 생성: '{topic}'")
 
+    # post_type이 auto거나 미지정이면 주제 기반 자동 결정
+    post_type_hint = ""
+    if POST_TYPE and POST_TYPE != "auto":
+        post_type_hint = f"post_type은 반드시 '{POST_TYPE}'으로 설정하세요."
+    else:
+        post_type_hint = "post_type은 주제를 분석해서 가장 적합한 유형으로 자동 결정하세요."
+
     user_message = f"""
 주제: {topic}
-category_key, image_keyword, video_keyword, post_type 자동 결정.
+{post_type_hint}
+category_key, image_keyword, video_keyword도 자동 결정.
 content_html 제외. 순수 JSON만 출력.
 """
     post_data = call_gemini(BLOG_SYSTEM_PROMPT, user_message)
